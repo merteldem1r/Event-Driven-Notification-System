@@ -1,0 +1,454 @@
+openapi: 3.0.3
+
+info:
+  title: Notification Service API
+  version: 0.1.0
+  description: |
+    Send SMS, email and push notifications.
+
+    Creating a notification is **asynchronous**: the API validates and stores it, then answers
+    `202 Accepted` at once. Workers send it later, at most 100 messages per second per channel.
+    Follow its progress with `GET /api/v1/notifications/{id}`.
+
+    **Headers on every request**
+
+    - `X-Correlation-ID` (optional): your ID for this request. It appears in our logs and is
+      returned in the response. A missing or unsafe value is replaced by a new UUID.
+
+    **Errors** always use one JSON format, `{"error": {"code", "message", "details"}}`.
+    Switch on `code`; it never changes. `message` is for people.
+
+servers:
+  - url: http://localhost:8080
+    description: Local development (`make run-api` or `make up`)
+
+tags:
+  - name: notifications
+    description: Create notifications and check their status
+  - name: operations
+    description: Endpoints for health checks and monitoring
+
+paths:
+  /api/v1/notifications:
+    post:
+      tags: [notifications]
+      operationId: createNotification
+      summary: Create a notification
+      description: |
+        Validates the notification, stores it as `pending` (which queues it for sending) and
+        returns it with `202 Accepted`.
+
+        **Idempotency.** Send an `Idempotency-Key` to make retries safe. Repeating a request with
+        the same key and the same body returns the original notification again (same `202` and
+        body, plus `Idempotent-Replayed: true`) and creates nothing new. Reusing a key with a
+        different body is rejected with `422`. A key stays used as long as its notification exists.
+
+        **Content limits** (counted in characters, not bytes): SMS 1,600, push 500, email 100,000.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateNotificationRequest"
+            examples:
+              sms:
+                summary: SMS with high priority
+                value:
+                  channel: sms
+                  recipient: "+905551234567"
+                  content: Flash sale starts now!
+                  priority: high
+              email:
+                summary: Email with the default priority
+                value:
+                  channel: email
+                  recipient: user@example.com
+                  content: Your order #1042 has shipped.
+      responses:
+        "202":
+          description: Accepted and queued, or replayed for a repeated idempotency key.
+          headers:
+            Location:
+              description: URL of the notification.
+              schema:
+                type: string
+                example: /api/v1/notifications/7c9e6679-7425-40de-944b-e07fc1f90ae7
+            Idempotent-Replayed:
+              description: "`true` when this is the stored result of an earlier request with the same key. Absent otherwise."
+              schema:
+                type: string
+                enum: ["true"]
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Notification"
+        "400":
+          description: |
+            The body can't be read (`invalid_body`: empty, malformed JSON, wrong types,
+            unknown fields, more than one object) or a field is invalid (`validation_failed`,
+            with every invalid field in `details`).
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                validation_failed:
+                  value:
+                    error:
+                      code: validation_failed
+                      message: the request has invalid fields
+                      details:
+                        - field: recipient
+                          message: must be an email address, e.g. user@example.com
+                        - field: priority
+                          message: must be high, normal or low
+                invalid_body:
+                  value:
+                    error:
+                      code: invalid_body
+                      message: unknown field "recipent"
+        "413":
+          $ref: "#/components/responses/BodyTooLarge"
+        "422":
+          description: The `Idempotency-Key` was already used for a different request (`idempotency_key_reused`).
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: idempotency_key_reused
+                  message: this Idempotency-Key was already used for a different request; use a new key for a new notification
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/notifications/{id}:
+    get:
+      tags: [notifications]
+      operationId: getNotification
+      summary: Get a notification and its status
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/CorrelationID"
+      responses:
+        "200":
+          description: The notification.
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Notification"
+        "400":
+          description: The ID is not a UUID (`invalid_id`).
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: invalid_id
+                  message: id must be a UUID
+        "404":
+          description: No notification has this ID (`not_found`).
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: not_found
+                  message: the requested item was not found
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /health:
+    get:
+      tags: [operations]
+      operationId: health
+      summary: Health check
+      description: Returns 200 when the service can reach its database, 503 otherwise. Used by Docker and load balancers.
+      responses:
+        "200":
+          description: Healthy.
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                status: ok
+                checks:
+                  database: ok
+        "503":
+          description: A dependency is unreachable.
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                status: unavailable
+                checks:
+                  database: unreachable
+
+components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: |
+        Your unique name for this action, e.g. a UUID or `order-1042-confirmation`.
+        Use the same key for retries and a new key for each new notification.
+        1 to 255 visible ASCII characters, no spaces.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+        pattern: "^[!-~]+$"
+      example: order-1042-confirmation
+    CorrelationID:
+      name: X-Correlation-ID
+      in: header
+      required: false
+      description: |
+        Your ID for this request, used in our logs and stored on created notifications.
+        1 to 128 characters of letters, digits and `. _ : -`; anything else is replaced by a new UUID.
+      schema:
+        type: string
+        maxLength: 128
+        pattern: "^[A-Za-z0-9._:-]+$"
+      example: shop-req-42
+
+  headers:
+    CorrelationID:
+      description: The correlation ID of this request (yours, or one we generated). Quote it when reporting a problem.
+      schema:
+        type: string
+        example: 2ff4f8b7-e533-404b-acce-cd5ea1fa298b
+
+  responses:
+    BodyTooLarge:
+      description: The request body is larger than 1 MB (`body_too_large`).
+      headers:
+        X-Correlation-ID:
+          $ref: "#/components/headers/CorrelationID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: body_too_large
+              message: request body must be at most 1048576 bytes
+    MethodNotAllowed:
+      description: The URL exists, but not with this method (`method_not_allowed`). The `Allow` header lists the methods that work.
+      headers:
+        Allow:
+          schema:
+            type: string
+            example: POST
+        X-Correlation-ID:
+          $ref: "#/components/headers/CorrelationID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: method_not_allowed
+              message: "method GET is not allowed at /api/v1/notifications; allowed: POST"
+    InternalError:
+      description: Unexpected server error (`internal_error`). Details are in our logs under the correlation ID, never in the response.
+      headers:
+        X-Correlation-ID:
+          $ref: "#/components/headers/CorrelationID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: internal_error
+              message: something went wrong
+
+  schemas:
+    Channel:
+      type: string
+      enum: [sms, email, push]
+    Priority:
+      type: string
+      enum: [high, normal, low]
+      description: Higher priorities are sent first.
+    Status:
+      type: string
+      enum: [pending, processing, sent, failed, cancelled]
+      description: |
+        `pending` waits in the queue, `processing` is being sent, `sent` was accepted by the
+        provider, `failed` gave up after retries, `cancelled` was cancelled before sending.
+
+    CreateNotificationRequest:
+      type: object
+      additionalProperties: false
+      required: [channel, recipient, content]
+      properties:
+        channel:
+          $ref: "#/components/schemas/Channel"
+        recipient:
+          type: string
+          description: |
+            Depends on the channel. `sms`: phone number in E.164 format (`+905551234567`).
+            `email`: a bare address (`user@example.com`, no display name).
+            `push`: device token, at most 512 characters, no spaces.
+          example: "+905551234567"
+        content:
+          type: string
+          minLength: 1
+          maxLength: 100000
+          description: Message text, not blank. At most 1,600 characters for SMS, 500 for push, 100,000 for email.
+          example: Flash sale starts now!
+        priority:
+          allOf:
+            - $ref: "#/components/schemas/Priority"
+          default: normal
+
+    Notification:
+      type: object
+      required: [id, channel, recipient, content, priority, status, attempts, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        batch_id:
+          type: string
+          format: uuid
+          description: Present when the notification was created in a batch.
+        channel:
+          $ref: "#/components/schemas/Channel"
+        recipient:
+          type: string
+        content:
+          type: string
+        priority:
+          $ref: "#/components/schemas/Priority"
+        status:
+          $ref: "#/components/schemas/Status"
+        attempts:
+          type: integer
+          minimum: 0
+          description: How many times sending was tried.
+        last_error:
+          type: string
+          description: Why the last attempt failed. Present only after a failure.
+        provider_message_id:
+          type: string
+          description: The provider's ID for the message. Present once sent.
+        correlation_id:
+          type: string
+          description: Correlation ID of the request that created the notification.
+        created_at:
+          type: string
+          format: date-time
+          description: In UTC.
+        updated_at:
+          type: string
+          format: date-time
+          description: In UTC.
+      example:
+        id: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+        channel: sms
+        recipient: "+905551234567"
+        content: Flash sale starts now!
+        priority: high
+        status: pending
+        attempts: 0
+        correlation_id: shop-req-42
+        created_at: "2026-11-20T10:00:00Z"
+        updated_at: "2026-11-20T10:00:00Z"
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum:
+                - invalid_body
+                - body_too_large
+                - validation_failed
+                - invalid_id
+                - not_found
+                - idempotency_key_reused
+                - route_not_found
+                - method_not_allowed
+                - internal_error
+              description: Stable error code. Switch on this, not on `message`.
+            message:
+              type: string
+              description: Human-readable explanation.
+            details:
+              type: array
+              description: Every invalid field, present for `validation_failed`.
+              items:
+                $ref: "#/components/schemas/FieldError"
+
+    FieldError:
+      type: object
+      required: [field, message]
+      properties:
+        field:
+          type: string
+          description: The invalid field, or the header name (`Idempotency-Key`).
+          example: recipient
+        message:
+          type: string
+          example: is required
+
+    HealthResponse:
+      type: object
+      required: [status, checks]
+      properties:
+        status:
+          type: string
+          enum: [ok, unavailable]
+        checks:
+          type: object
+          additionalProperties:
+            type: string
+            enum: [ok, unreachable]

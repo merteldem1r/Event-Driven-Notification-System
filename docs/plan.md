@@ -9,7 +9,7 @@ is tested. Then we stop, explain it, and the user commits it.
 
 Status: `[x]` done, `[ ]` not done. The next step is marked **(next)**.
 
-> **Current position:** Phase 4, step **4.7** (OpenAPI spec for the Phase 4 endpoints).
+> **Current position:** Phase 5, step **5.1** (batch create, decide D5).
 
 ---
 
@@ -40,19 +40,20 @@ Goal: the schema exists and Go code can read/write it, tested against a real Pos
 **Verify:** migrations run on `docker compose up`; repository tests pass against a real database.
 **Summary:** `docs/application/04-database.md`.
 
-## Phase 4 · API: create and get one notification
+## Phase 4 · API: create and get one notification (done)
 - [x] 4.1 Validation rules for notifications: required fields, allowed values, recipient format, content limits per channel (D4 decided); all field errors returned together
 - [x] 4.2 Notification service; error envelope (D11); strict JSON body reading (1 MB cap, unknown fields rejected); `POST /api/v1/notifications` → `202` with the full notification and `Location`; priority defaults to `normal` (API-1, PROC-4)
 - [x] 4.3 `GET /api/v1/notifications/{id}` → `200` with the notification; unknown ID → `404 not_found`, malformed ID → `400 invalid_id` (API-3)
 - [x] 4.4 Idempotency key (D12): optional `Idempotency-Key` header; replay returns the original `202` + `Idempotent-Replayed: true`; different body → `422`; `INSERT ... ON CONFLICT DO NOTHING`; concurrency test against real Postgres (PROC-5, API level)
 - [x] 4.5 JSON error envelope for unknown routes (`404 route_not_found`) and wrong methods (`405 method_not_allowed` with an `Allow` header), so every error follows D11
 - [x] 4.6 Correlation ID (D13): `X-Correlation-ID` middleware (client ID kept if safe, else a new UUID), returned on every response, added to every log line by `internal/logging`, stored on the notification (OBS-3, API side)
-- [ ] 4.7 OpenAPI spec for these endpoints (DEL-4) **(next)**
+- [x] 4.7 OpenAPI 3.0.3 spec for these endpoints, plus tests that it is valid, lists exactly the router's routes, and matches real responses (DEL-4)
 
 **Verify:** create via Postman → 202; get → `pending`; same idempotency key → same notification; invalid input → 400.
+**Summary:** `docs/application/05-api-create-and-get.md`.
 
 ## Phase 5 · API: batch, list, cancel
-- [ ] 5.1 Batch create, up to 1000, efficient insert (decide D5) (API-2, IMP-8)
+- [ ] 5.1 Batch create, up to 1000, efficient insert (decide D5) (API-2, IMP-8) **(next)**
 - [ ] 5.2 Get batch status summary (API-4)
 - [ ] 5.3 List with filters + pagination (decide D6) (API-6, API-7)
 - [ ] 5.4 Cancel with a conditional update (API-5, IMP-4)
