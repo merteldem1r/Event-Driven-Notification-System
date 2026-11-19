@@ -18,7 +18,7 @@ Status values: **Done**, **Partial**, **Todo**.
 | API-2 | Batch creation, up to 1000 notifications per request | Done | 5 | `POST /api/v1/notifications/batch`; shared batch ID; all-or-nothing (D5); `Idempotency-Key` for the whole batch |
 | API-3 | Query notification status by ID | Done | 4 | `GET /api/v1/notifications/{id}`; 404 if unknown, 400 if the ID is not a UUID |
 | API-4 | Query status by batch ID | Done | 5 | `GET /api/v1/batches/{id}`: total and counts per status |
-| API-5 | Cancel pending notifications | Todo | 5 | Atomic: only if still `pending`/`scheduled` |
+| API-5 | Cancel pending notifications | Partial | 5 | Single cancel done (D14; scheduled and retry-waiting rows are `pending` too); batch cancel in 5.6 |
 | API-6 | List notifications with filters (status, channel, date range) | Done | 5 | `GET /api/v1/notifications`; also `batch_id`; all errors at once |
 | API-7 | Pagination on the list endpoint | Done | 5 | Cursor pagination (D6), stable under inserts |
 
@@ -89,7 +89,7 @@ Status values: **Done**, **Partial**, **Todo**.
 | IMP-1 | The rate limit holds across **all** worker processes, not per worker | Todo | 7 | |
 | IMP-2 | Two workers never claim the same notification | Todo | 6 | |
 | IMP-3 | Saving and enqueuing are atomic (no dual-write problem) | Done | 3, 5 | One table: inserting a row is enqueuing it; a batch is one statement, so all or none of it is saved |
-| IMP-4 | Cancel and worker claim can't both win (no race) | Todo | 5 | Conditional `UPDATE` |
+| IMP-4 | Cancel and worker claim can't both win (no race) | Done | 5 | One conditional `UPDATE`; race tested against a simulated claim |
 | IMP-5 | Graceful shutdown of API and workers (finish in-flight work on SIGTERM) | Partial | 2, 8 | API (done); worker pending |
 | IMP-6 | Low-priority messages are not starved forever | Todo | 6 | Depends on D7 |
 | IMP-7 | Config only via environment variables; invalid config fails at startup | Done | 2 | `internal/config` |

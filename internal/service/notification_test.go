@@ -16,6 +16,7 @@ type fakeStore struct {
 	err    error
 	saved  []domain.Notification
 	listed []domain.ListFilter // filters List was called with
+	misses int                 // CancelPending calls that find nothing, as if a worker held the row
 }
 
 func (f *fakeStore) Create(_ context.Context, n domain.Notification) (domain.Notification, error) {
@@ -97,6 +98,23 @@ func (f *fakeStore) BatchSummary(_ context.Context, batchID uuid.UUID) (domain.B
 func (f *fakeStore) List(_ context.Context, filter domain.ListFilter) (domain.Page, error) {
 	f.listed = append(f.listed, filter)
 	return domain.Page{Items: f.saved}, nil
+}
+
+func (f *fakeStore) CancelPending(_ context.Context, id uuid.UUID) (domain.Notification, bool, error) {
+	if f.err != nil {
+		return domain.Notification{}, false, f.err
+	}
+	if f.misses > 0 {
+		f.misses--
+		return domain.Notification{}, false, nil
+	}
+	for i, n := range f.saved {
+		if n.ID == id && n.Status == domain.StatusPending {
+			f.saved[i].Status = domain.StatusCancelled
+			return f.saved[i], true, nil
+		}
+	}
+	return domain.Notification{}, false, nil
 }
 
 func validNotification() domain.Notification {
@@ -346,4 +364,62 @@ func TestList(t *testing.T) {
 	if len(store.listed) != 1 {
 		t.Errorf("store.List called %d times, want 1", len(store.listed))
 	}
+}
+
+func TestCancel(t *testing.T) {
+	saved := func(status domain.Status) (*fakeStore, uuid.UUID) {
+		id := uuid.New()
+		return &fakeStore{saved: []domain.Notification{{ID: id, Status: status}}}, id
+	}
+
+	t.Run("pending is cancelled", func(t *testing.T) {
+		store, id := saved(domain.StatusPending)
+		n, err := NewNotifications(store).Cancel(t.Context(), id)
+		if err != nil || n.Status != domain.StatusCancelled {
+			t.Errorf("got %s, %v; want cancelled", n.Status, err)
+		}
+	})
+
+	t.Run("already cancelled is returned unchanged", func(t *testing.T) {
+		store, id := saved(domain.StatusCancelled)
+		n, err := NewNotifications(store).Cancel(t.Context(), id)
+		if err != nil || n.Status != domain.StatusCancelled {
+			t.Errorf("got %s, %v; want cancelled, no error", n.Status, err)
+		}
+	})
+
+	for _, status := range []domain.Status{domain.StatusProcessing, domain.StatusSent, domain.StatusFailed} {
+		t.Run(string(status)+" is not cancellable", func(t *testing.T) {
+			store, id := saved(status)
+			_, err := NewNotifications(store).Cancel(t.Context(), id)
+			var nc *domain.NotCancellableError
+			if !errors.As(err, &nc) || nc.Status != status {
+				t.Errorf("err = %v, want NotCancellableError{%s}", err, status)
+			}
+		})
+	}
+
+	t.Run("unknown id", func(t *testing.T) {
+		_, err := NewNotifications(&fakeStore{}).Cancel(t.Context(), uuid.New())
+		if !errors.Is(err, domain.ErrNotFound) {
+			t.Errorf("err = %v, want domain.ErrNotFound", err)
+		}
+	})
+
+	t.Run("pending again after a miss is retried", func(t *testing.T) {
+		store, id := saved(domain.StatusPending)
+		store.misses = 1
+		n, err := NewNotifications(store).Cancel(t.Context(), id)
+		if err != nil || n.Status != domain.StatusCancelled {
+			t.Errorf("got %s, %v; want cancelled on the second attempt", n.Status, err)
+		}
+	})
+
+	t.Run("gives up after a few attempts", func(t *testing.T) {
+		store, id := saved(domain.StatusPending)
+		store.misses = cancelAttempts
+		if _, err := NewNotifications(store).Cancel(t.Context(), id); err == nil {
+			t.Error("err = nil, want an error after every attempt missed")
+		}
+	})
 }

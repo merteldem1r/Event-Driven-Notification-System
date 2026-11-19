@@ -586,3 +586,66 @@ func TestList_Filters(t *testing.T) {
 		})
 	}
 }
+
+func TestCancelPending(t *testing.T) {
+	repo := NewNotifications(testDB)
+	batchID := uuid.New()
+	base := time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC)
+
+	pending := insertAt(t, batchID, base, domain.StatusPending, domain.ChannelSMS)
+	before, _ := repo.GetByID(t.Context(), pending)
+	n, ok, err := repo.CancelPending(t.Context(), pending)
+	if err != nil || !ok || n.Status != domain.StatusCancelled || !n.UpdatedAt.After(before.UpdatedAt) {
+		t.Errorf("pending: got %+v, ok %v, err %v; want cancelled with a newer updated_at", n, ok, err)
+	}
+
+	// Anything not pending, including an already cancelled row, is left alone.
+	for _, status := range []domain.Status{domain.StatusProcessing, domain.StatusSent, domain.StatusFailed, domain.StatusCancelled} {
+		id := insertAt(t, batchID, base, status, domain.ChannelSMS)
+		if _, ok, err := repo.CancelPending(t.Context(), id); err != nil || ok {
+			t.Errorf("%s: ok %v, err %v; want not cancelled", status, ok, err)
+		}
+		if got, _ := repo.GetByID(t.Context(), id); got.Status != status {
+			t.Errorf("%s: status changed to %s", status, got.Status)
+		}
+	}
+
+	if _, ok, err := repo.CancelPending(t.Context(), uuid.New()); err != nil || ok {
+		t.Errorf("unknown id: ok %v, err %v; want not cancelled, no error", ok, err)
+	}
+}
+
+// A cancel and a worker claim racing for the same row: exactly one wins, every time (IMP-4).
+func TestCancelPending_RacesWorkerClaim(t *testing.T) {
+	repo := NewNotifications(testDB)
+	batchID := uuid.New()
+
+	for i := range 200 {
+		id := insertAt(t, batchID, time.Now(), domain.StatusPending, domain.ChannelSMS)
+
+		var cancelled, claimed bool
+		var cancelErr, claimErr error
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			<-start
+			_, cancelled, cancelErr = repo.CancelPending(t.Context(), id)
+		})
+		wg.Go(func() {
+			<-start
+			// The claim the worker will make in Phase 6, reduced to its condition.
+			tag, err := testDB.Exec(t.Context(),
+				`UPDATE notifications SET status = 'processing' WHERE id = $1 AND status = 'pending'`, id)
+			claimed, claimErr = tag.RowsAffected() == 1, err
+		})
+		close(start)
+		wg.Wait()
+
+		if cancelErr != nil || claimErr != nil {
+			t.Fatalf("round %d: cancel err %v, claim err %v", i, cancelErr, claimErr)
+		}
+		if cancelled == claimed {
+			t.Fatalf("round %d: cancelled %v, claimed %v; want exactly one", i, cancelled, claimed)
+		}
+	}
+}

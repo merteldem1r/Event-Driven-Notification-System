@@ -97,6 +97,20 @@ func (f *fakeNotificationService) List(_ context.Context, filter domain.ListFilt
 	return page, nil
 }
 
+// Cancel knows only fakeID and cancels it.
+func (f *fakeNotificationService) Cancel(_ context.Context, id uuid.UUID) (domain.Notification, error) {
+	f.calls++
+	if f.err != nil {
+		return domain.Notification{}, f.err
+	}
+	if id != fakeID {
+		return domain.Notification{}, fmt.Errorf("get notification %s: %w", id, domain.ErrNotFound)
+	}
+	n, _ := f.Get(context.Background(), fakeID) // can't fail for fakeID
+	n.Status = domain.StatusCancelled
+	return n, nil
+}
+
 // Get knows only fakeID, as a sent notification.
 func (f *fakeNotificationService) Get(_ context.Context, id uuid.UUID) (domain.Notification, error) {
 	f.calls++
@@ -516,6 +530,55 @@ func TestGetBatch_Errors(t *testing.T) {
 			var got errorResponse
 			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || rec.Code != tt.wantStatus || got.Error.Code != tt.wantCode {
 				t.Errorf("got %d %s, want %d %q", rec.Code, rec.Body, tt.wantStatus, tt.wantCode)
+			}
+		})
+	}
+}
+
+func cancelNotification(t *testing.T, svc NotificationService, id string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/notifications/"+id+"/cancel", nil)
+	rec := httptest.NewRecorder()
+	NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, svc).ServeHTTP(rec, req)
+	return rec
+}
+
+func TestCancelNotification(t *testing.T) {
+	rec := cancelNotification(t, &fakeNotificationService{}, fakeID.String())
+
+	var got notificationResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("body: %v\n%s", err, rec.Body)
+	}
+	if rec.Code != http.StatusOK || got.ID != fakeID || got.Status != "cancelled" {
+		t.Errorf("got %d, id %s, status %s; want 200, %s, cancelled", rec.Code, got.ID, got.Status, fakeID)
+	}
+}
+
+func TestCancelNotification_Errors(t *testing.T) {
+	tests := []struct {
+		name        string
+		id          string
+		err         error
+		wantStatus  int
+		wantCode    string
+		wantMessage string
+	}{
+		{"too late", fakeID.String(), &domain.NotCancellableError{Status: domain.StatusSent},
+			http.StatusConflict, codeNotCancellable,
+			"the notification is sent and can no longer be cancelled; only pending notifications can"},
+		{"unknown", uuid.NewString(), nil, http.StatusNotFound, codeNotFound, "the requested item was not found"},
+		{"malformed id", "abc", nil, http.StatusBadRequest, codeInvalidID, "id must be a UUID"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := cancelNotification(t, &fakeNotificationService{err: tt.err}, tt.id)
+			var got errorResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+				t.Fatalf("body: %v\n%s", err, rec.Body)
+			}
+			if rec.Code != tt.wantStatus || got.Error.Code != tt.wantCode || got.Error.Message != tt.wantMessage {
+				t.Errorf("got %d %+v, want %d %q %q", rec.Code, got.Error, tt.wantStatus, tt.wantCode, tt.wantMessage)
 			}
 		})
 	}

@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -17,6 +18,7 @@ const (
 	codeInvalidID        = "invalid_id"
 	codeNotFound         = "not_found"
 	codeKeyReused        = "idempotency_key_reused"
+	codeNotCancellable   = "not_cancellable"
 	codeRouteNotFound    = "route_not_found"
 	codeMethodNotAllowed = "method_not_allowed"
 	codeInternal         = "internal_error"
@@ -67,6 +69,13 @@ func writeServiceError(w http.ResponseWriter, r *http.Request, logger *slog.Logg
 	if errors.Is(err, domain.ErrIdempotencyKeyReused) {
 		writeError(w, http.StatusUnprocessableEntity, codeKeyReused,
 			"this Idempotency-Key was already used for a different request; use a new key for a new notification")
+		return
+	}
+
+	var nc *domain.NotCancellableError
+	if errors.As(err, &nc) {
+		writeError(w, http.StatusConflict, codeNotCancellable, fmt.Sprintf(
+			"the notification is %s and can no longer be cancelled; only pending notifications can", nc.Status))
 		return
 	}
 

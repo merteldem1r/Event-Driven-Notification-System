@@ -158,6 +158,27 @@ func (r *Notifications) GetByIdempotencyKey(ctx context.Context, key string) (do
 	return n, nil
 }
 
+// CancelPending cancels the notification only if it is still pending, in one statement,
+// so a worker claiming it at the same moment can't also win (IMP-4). ok is false when no
+// pending notification with this ID exists; the caller decides what that means.
+func (r *Notifications) CancelPending(ctx context.Context, id uuid.UUID) (_ domain.Notification, ok bool, _ error) {
+	// The row lock taken by UPDATE makes a concurrent claim wait; whichever goes second
+	// re-checks status = 'pending', finds it changed and updates nothing.
+	row := r.db.QueryRow(ctx, `
+		UPDATE notifications SET status = 'cancelled', updated_at = now()
+		WHERE id = $1 AND status = 'pending'
+		RETURNING `+notificationColumns, id)
+
+	n, err := scanNotification(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Notification{}, false, nil
+	}
+	if err != nil {
+		return domain.Notification{}, false, fmt.Errorf("cancel notification %s: %w", id, err)
+	}
+	return n, true, nil
+}
+
 // List returns one page of notifications matching f, newest first (D6: cursor pagination).
 func (r *Notifications) List(ctx context.Context, f domain.ListFilter) (domain.Page, error) {
 	var afterTime *time.Time

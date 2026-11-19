@@ -150,6 +150,16 @@ type FieldError struct {
 	Message string
 }
 
+// NotCancellableError means the notification is past pending, so it can no longer be cancelled.
+type NotCancellableError struct {
+	Status Status // the status it has instead
+}
+
+// Error names the status that prevents the cancel.
+func (e *NotCancellableError) Error() string {
+	return fmt.Sprintf("notification is %s and can no longer be cancelled", e.Status)
+}
+
 // ValidationError lists every invalid field, so clients can fix them all at once.
 type ValidationError struct {
 	Fields []FieldError

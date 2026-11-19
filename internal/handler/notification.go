@@ -20,6 +20,7 @@ type NotificationService interface {
 	Get(ctx context.Context, id uuid.UUID) (domain.Notification, error)
 	GetBatch(ctx context.Context, batchID uuid.UUID) (domain.BatchSummary, error)
 	List(ctx context.Context, f domain.ListFilter) (domain.Page, error)
+	Cancel(ctx context.Context, id uuid.UUID) (domain.Notification, error)
 }
 
 // Idempotency headers (D12), as in the IETF draft and common APIs.
@@ -186,6 +187,25 @@ func GetNotification(svc NotificationService, logger *slog.Logger) http.HandlerF
 			writeServiceError(w, r, logger, err)
 			return
 		}
+		writeJSON(w, http.StatusOK, toNotificationResponse(n))
+	}
+}
+
+// CancelNotification handles POST /api/v1/notifications/{id}/cancel: stops a notification
+// that hasn't been sent yet (D14).
+func CancelNotification(svc NotificationService, logger *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := idParam(w, r)
+		if !ok {
+			return
+		}
+
+		n, err := svc.Cancel(r.Context(), id)
+		if err != nil {
+			writeServiceError(w, r, logger, err)
+			return
+		}
+		logger.InfoContext(r.Context(), "notification cancelled", "notification_id", n.ID)
 		writeJSON(w, http.StatusOK, toNotificationResponse(n))
 	}
 }

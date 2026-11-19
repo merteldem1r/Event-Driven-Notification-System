@@ -28,6 +28,8 @@ func TestRouter_UnknownRoutesAndMethods(t *testing.T) {
 			codeMethodNotAllowed, "GET, POST", "method PUT is not allowed at /api/v1/notifications; allowed: GET, POST"},
 		{"DELETE on a notification", http.MethodDelete, notificationURL, http.StatusMethodNotAllowed,
 			codeMethodNotAllowed, "GET", "method DELETE is not allowed at " + notificationURL + "; allowed: GET"},
+		{"GET on cancel", http.MethodGet, notificationURL + "/cancel", http.StatusMethodNotAllowed,
+			codeMethodNotAllowed, "POST", "method GET is not allowed at " + notificationURL + "/cancel; allowed: POST"},
 		{"POST on health", http.MethodPost, "/health", http.StatusMethodNotAllowed,
 			codeMethodNotAllowed, "GET", "method POST is not allowed at /health; allowed: GET"},
 	}

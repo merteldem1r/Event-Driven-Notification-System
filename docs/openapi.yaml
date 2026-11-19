@@ -342,6 +342,78 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /api/v1/notifications/{id}/cancel:
+    post:
+      tags: [notifications]
+      operationId: cancelNotification
+      summary: Cancel a notification that hasn't been sent
+      description: |
+        Cancels the notification if it is still `pending` (including scheduled ones and ones waiting
+        for a retry). The check and the change are one atomic step, so a worker can't send it
+        afterwards. The notification is kept, with status `cancelled`.
+        Cancelling an already cancelled notification returns it again with `200`, so retries are safe.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/CorrelationID"
+      responses:
+        "200":
+          description: Cancelled (now or earlier).
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Notification"
+        "400":
+          description: The ID is not a UUID (`invalid_id`).
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: invalid_id
+                  message: id must be a UUID
+        "404":
+          description: No notification has this ID (`not_found`).
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: not_found
+                  message: the requested item was not found
+        "409":
+          description: Too late, the notification is `processing`, `sent` or `failed` (`not_cancellable`).
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: not_cancellable
+                  message: the notification is sent and can no longer be cancelled; only pending notifications can
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /api/v1/batches/{id}:
     get:
       tags: [notifications]
@@ -718,6 +790,7 @@ components:
                 - invalid_id
                 - not_found
                 - idempotency_key_reused
+                - not_cancellable
                 - route_not_found
                 - method_not_allowed
                 - internal_error

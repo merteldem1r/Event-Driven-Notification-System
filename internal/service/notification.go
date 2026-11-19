@@ -20,6 +20,7 @@ type NotificationStore interface {
 	GetByIdempotencyKeys(ctx context.Context, keys []string) ([]domain.Notification, error)
 	BatchSummary(ctx context.Context, batchID uuid.UUID) (domain.BatchSummary, error)
 	List(ctx context.Context, f domain.ListFilter) (domain.Page, error)
+	CancelPending(ctx context.Context, id uuid.UUID) (_ domain.Notification, ok bool, _ error)
 }
 
 // Notifications implements the notification use cases.
@@ -154,4 +155,39 @@ func (s *Notifications) List(ctx context.Context, f domain.ListFilter) (domain.P
 		return domain.Page{}, fmt.Errorf("list notifications: %w", err)
 	}
 	return page, nil
+}
+
+// cancelAttempts bounds Cancel's retries; see Cancel.
+const cancelAttempts = 3
+
+// Cancel stops a notification that hasn't been sent yet (D14). Cancelling an already
+// cancelled notification returns it unchanged, so retrying is safe. Otherwise a notification
+// past pending gives a *domain.NotCancellableError; an unknown ID wraps domain.ErrNotFound.
+func (s *Notifications) Cancel(ctx context.Context, id uuid.UUID) (domain.Notification, error) {
+	for range cancelAttempts {
+		n, ok, err := s.store.CancelPending(ctx, id)
+		if err != nil {
+			return domain.Notification{}, fmt.Errorf("cancel: %w", err)
+		}
+		if ok {
+			return n, nil
+		}
+
+		// Nothing was pending: find out why.
+		current, err := s.store.GetByID(ctx, id)
+		if err != nil {
+			return domain.Notification{}, err // the repository already wraps it with the ID
+		}
+		switch current.Status {
+		case domain.StatusCancelled:
+			return current, nil
+		case domain.StatusPending:
+			// It was pending again by the time we looked (a worker released it in between),
+			// so try the cancel again.
+			continue
+		default:
+			return domain.Notification{}, &domain.NotCancellableError{Status: current.Status}
+		}
+	}
+	return domain.Notification{}, fmt.Errorf("cancel notification %s: still changing after %d attempts", id, cancelAttempts)
 }
