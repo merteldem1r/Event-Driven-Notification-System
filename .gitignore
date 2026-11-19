@@ -23,3 +23,6 @@ vendor/
 ## OS files
 .DS_Store
 Thumbs.db
+
+# other
+docs/Software-Engineer-Assessment-Golang.pdf
