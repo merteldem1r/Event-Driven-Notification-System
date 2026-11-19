@@ -36,7 +36,7 @@ func run() error {
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.HTTPPort),
-		Handler: handler.NewRouter(),
+		Handler: handler.NewRouter(logger),
 		// Timeouts protect the server from slow or stuck clients
 		// holding connections open forever.
 		ReadHeaderTimeout: 5 * time.Second,

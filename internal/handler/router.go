@@ -3,6 +3,7 @@
 package handler
 
 import (
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -11,9 +12,13 @@ import (
 
 // NewRouter builds the HTTP router with every route of the API.
 // Keeping it in one function lets tests exercise the exact same routing as main.
-func NewRouter() http.Handler {
+func NewRouter(logger *slog.Logger) http.Handler {
 	r := chi.NewRouter()
 
+	// Middleware runs in the order it's added, wrapping everything after it.
+	// RequestLogger is outermost so it also sees (and logs) the 500 that
+	// Recoverer produces when a handler panics.
+	r.Use(RequestLogger(logger))
 	// Recoverer turns a panic in a handler into a 500 response
 	// instead of crashing the whole process.
 	r.Use(middleware.Recoverer)

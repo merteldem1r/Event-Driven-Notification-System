@@ -48,7 +48,7 @@ Status values: **Done**, **Partial**, **Todo**.
 | ID | Requirement | Status | Phase | Notes |
 |---|---|---|---|---|
 | OBS-1 | Real-time metrics endpoint: queue depth, success/failure rates, latency | Todo | 9 | Prometheus `/metrics` |
-| OBS-2 | Structured logging | Partial | 2, 9 | JSON logs via `slog` in the API (done); worker logs pending |
+| OBS-2 | Structured logging | Partial | 2, 9 | JSON logs via `slog` in the API (done); one log line per HTTP request (done); worker logs pending |
 | OBS-3 | Correlation IDs in logs, carried from API to worker | Todo | 4, 9 | |
 | OBS-4 | Health check endpoint | Partial | 2, 3 | `GET /health` liveness (done); DB/Redis checks pending |
 

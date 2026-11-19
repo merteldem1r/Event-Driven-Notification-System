@@ -9,7 +9,7 @@ is tested. Then we stop, explain it, and the user commits it.
 
 Status: `[x]` done, `[ ]` not done. The next step is marked **(next)**.
 
-> **Current position:** Phase 2, step **2.3** (docker-compose with API, PostgreSQL and Redis).
+> **Current position:** Phase 2, step **2.4** (docker-compose with API, PostgreSQL and Redis).
 
 ---
 
@@ -24,8 +24,9 @@ Status: `[x]` done, `[ ]` not done. The next step is marked **(next)**.
 Goal: a running service in Docker with the basic tooling around it.
 - [x] 2.1 API server: config from env, JSON logging, chi router (`/health`, `/api/v1` group), timeouts, graceful shutdown, first test
 - [x] 2.2 Dockerfile for the API (multi-stage build, distroless non-root image, `.dockerignore`)
-- [ ] 2.3 `docker-compose.yml`: api + PostgreSQL + Redis, with health checks **(next)**
-- [ ] 2.4 Linting (golangci-lint) + CI job running vet, lint and tests
+- [x] 2.3 Request-logging middleware: one JSON log line per request (method, path, status, bytes, duration)
+- [ ] 2.4 `docker-compose.yml`: api + PostgreSQL + Redis, with health checks; Makefile shortcuts for full system and infra-only **(next)**
+- [ ] 2.5 Linting (golangci-lint) + CI job running vet, lint and tests
 
 **Verify:** `docker compose up` starts everything; `GET /health` → 200; CI green.
 
@@ -42,7 +43,7 @@ Goal: the schema exists and Go code can read/write it, tested against a real Pos
 - [ ] 4.2 Standard JSON error format + `POST /api/v1/notifications` → `202` (API-1, PROC-4)
 - [ ] 4.3 `GET /api/v1/notifications/{id}` (API-3)
 - [ ] 4.4 Idempotency key (PROC-5, API level)
-- [ ] 4.5 Correlation ID middleware + request logging (OBS-3)
+- [ ] 4.5 Correlation ID middleware, added to every log line (OBS-3)
 - [ ] 4.6 OpenAPI spec for these endpoints (DEL-4)
 
 **Verify:** create via Postman → 202; get → `pending`; same idempotency key → same notification; invalid input → 400.
