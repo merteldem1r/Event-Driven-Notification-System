@@ -1,4 +1,4 @@
-.PHONY: hooks run-api test lint check up down infra-up logs
+.PHONY: hooks run-api test lint check up down infra-up logs migrate-up migrate-down
 
 # Same version as CI (.github/workflows/ci.yml). Change both together.
 GOLANGCI_LINT_VERSION := v2.15.0
@@ -35,9 +35,18 @@ up:
 down:
 	docker compose down
 
-## infra-up: start only PostgreSQL and Redis, for running the API with `make run-api`
+## infra-up: start PostgreSQL and Redis and apply migrations, for running the API with `make run-api`
 infra-up:
 	docker compose up -d postgres redis
+	$(MAKE) migrate-up
+
+## migrate-up: apply all pending migrations
+migrate-up:
+	docker compose run --rm migrate up
+
+## migrate-down: roll back the last migration
+migrate-down:
+	docker compose run --rm migrate down 1
 
 ## logs: follow the API container logs (Ctrl+C stops following, not the API)
 logs:

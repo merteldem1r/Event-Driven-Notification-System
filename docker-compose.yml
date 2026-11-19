@@ -1,6 +1,6 @@
 # Local development stack.
-#   Whole system:          docker compose up --build -d   (make up)
-#   Only infrastructure:   docker compose up -d postgres redis   (make infra-up)
+#   Whole system:          make up
+#   Only infrastructure:   make infra-up   (postgres + redis + migrations)
 #
 # Credentials here are for local development only.
 
@@ -21,6 +21,22 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # One-off job: applies pending migrations, then exits.
+  migrate:
+    image: migrate/migrate:v4.18.3
+    volumes:
+      - ./migrations:/migrations:ro
+    entrypoint:
+      - migrate
+      - -path=/migrations
+      - -database=postgres://notification:notification@postgres:5432/notification?sslmode=disable
+    command: ["up"] # override with e.g. `docker compose run --rm migrate down 1`
+    depends_on:
+      postgres:
         condition: service_healthy
 
   postgres:

@@ -79,7 +79,7 @@ Status values: **Done**, **Partial**, **Todo**.
 | DEL-2 | README.md: setup, architecture overview, API examples | Todo | 15 | |
 | DEL-3 | Docker Compose: one-command setup (`docker compose up`) | Partial | 2 | Dockerfile + compose with api, PostgreSQL, Redis (done); worker and migrations join in later phases |
 | DEL-4 | API documentation: Swagger/OpenAPI specification | Todo | 4–15 | Grows with each endpoint |
-| DEL-5 | Database migrations: versioned schema changes | Todo | 3 | golang-migrate |
+| DEL-5 | Database migrations: versioned schema changes | Done | 3 | golang-migrate, numbered up/down SQL files, applied automatically by Compose; new migrations added as features need them |
 | DEL-6 | Test suite runnable with a single command | Partial | all | `make test` (race detector) and `make check` (done); grows with each step |
 
 ## 8. Implied requirements (not written, but expected)
