@@ -13,7 +13,7 @@
 | D1 | Queue technology | **Now** | Decided: PostgreSQL |
 | D2 | Where the shared rate limiter lives | **Now** | Decided: Redis |
 | D3 | Tooling (router, DB library, migrations, logging, tests, …) | **Now** (quick confirm) | Decided: as recommended |
-| D4 | Content limits per channel | Phase 4 (create API) | Later |
+| D4 | Validation rules and content limits per channel | Phase 4 (create API) | Decided: see D4 below |
 | D5 | Batch validation: all-or-nothing vs partial | Phase 5 (batch API) | Later |
 | D6 | Pagination: offset vs cursor | Phase 5 (list API) | Later |
 | D7 | Priority strategy: strict vs weighted | Phase 6 (worker) | Later |
@@ -209,6 +209,30 @@ These have well-known, sensible defaults in Go. Recommendation first; alternativ
 
 ---
 
+## D4 — Validation rules and content limits
+
+Decided at the start of Phase 4. The rules live in `domain.Notification.Validate`, so the API,
+the batch endpoint and any later feature share them. The database `CHECK` constraints stay as a
+second line of defense.
+
+| Question | Options | Chosen |
+|---|---|---|
+| Content length | One SMS segment (160) / total cap / encoding-aware segment counting | **Total cap per channel:** SMS 1,600, push 500, email 100,000 characters. Blank content is rejected |
+| How to count | Bytes / characters | **Characters** (`utf8.RuneCountInString`): `"ş"` is 2 bytes but 1 character |
+| Recipient | Format checks / full libraries (libphonenumber) | **Format checks:** E.164 regex for SMS, `net/mail` exact match for email, push token of 1 to 512 characters without spaces |
+| Priority | Required / optional with a default | **Optional, defaults to `normal`** when the request leaves it out; unknown values are rejected |
+| Error reporting | First error / all errors | **All errors at once** as a list of `{field, message}` |
+
+Why: 1,600 characters (about 10 segments) is the cap large SMS providers use, and the provider
+splits long text. Push stays far below the ~4 KB payload limit even with 4-byte characters. Email
+has no real limit, so the cap only protects storage. Format checks catch real mistakes with the
+standard library only; whether a number or address exists, only the provider can know.
+
+What we give up: clients aren't told how many SMS segments (and so what cost) a message has, and
+a well-formed but non-existent number passes validation. Segment counting can be added later.
+
+---
+
 ## Resulting architecture
 
 ```
@@ -238,4 +262,5 @@ These have well-known, sensible defaults in Go. Recommendation first; alternativ
 | D1 | Queue technology | **PostgreSQL** (`FOR UPDATE SKIP LOCKED`), behind a Go `Queue` interface | No dual-write problem; priority, retries, scheduling and cancel are each a column or a `WHERE`; one less service; all queue logic is our own code | Throughput far beyond 300/s; the "classic broker" look | 2026-11-19 |
 | D2 | Rate limiter location | **Redis** (shared token bucket / GCRA) | Correct across any number of worker processes; standard tool; reused for WebSocket updates later | One more service in docker-compose | 2026-11-19 |
 | D3 | Tooling | **chi, pgx v5 + hand-written SQL, golang-migrate, log/slog, prometheus/client_golang, env-var config, testing + testcontainers-go, hand-written OpenAPI, cmd/api + cmd/worker** | Standard, small, explainable Go choices | — | 2026-11-19 |
+| D4 | Validation rules | **Per-channel character caps** (SMS 1,600, push 500, email 100,000); E.164 / `net/mail` / token-shape recipient checks; priority defaults to `normal`; all field errors returned at once | Simple, standard library only, matches real provider limits; one response lists every problem (useful for batches) | Segment and cost counting; checking that recipients really exist | 2026-11-20 |
 | D10 | Local `.env.local` loading | **godotenv**, via `config.LoadDotEnv` at startup; missing file ignored; never overrides existing variables | Works with `make run-api`, plain `go run` and the IDE debugger; real environment wins over the file; no effect in Docker/production (file not in the image) | One small dependency; one local-only line in startup code (alternative was loading it in the Makefile) | 2026-11-19 |

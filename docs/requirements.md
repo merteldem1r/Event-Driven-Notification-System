@@ -29,7 +29,7 @@ Status values: **Done**, **Partial**, **Todo**.
 | PROC-1 | Process notifications asynchronously via queue workers | Todo | 6 | PostgreSQL queue, `FOR UPDATE SKIP LOCKED` |
 | PROC-2 | Rate limiting: max 100 messages/second **per channel** | Todo | 7 | Shared across all workers (Redis) |
 | PROC-3 | Priority queue support (high, normal, low) | Todo | 6 | Strict vs weighted is decision D7 |
-| PROC-4 | Content validation (character limits, required fields) | Todo | 4 | Limits are decision D4 |
+| PROC-4 | Content validation (character limits, required fields) | Partial | 4 | Rules done in `domain` (D4: SMS 1,600, push 500, email 100,000 characters; recipient format per channel); enforced by the API in 4.2 |
 | PROC-5 | Idempotency support to prevent duplicate sends | Todo | 4, 8 | API level: `Idempotency-Key`; worker level: lease + dedup key |
 
 ## 3. Delivery & Retry Logic (our own design)
