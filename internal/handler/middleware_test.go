@@ -42,7 +42,8 @@ func TestRequestLogger_LogsEveryRequest(t *testing.T) {
 			var buf bytes.Buffer
 			router := NewRouter(newBufferLogger(&buf))
 
-			router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(tt.method, tt.path, nil))
+			req := httptest.NewRequestWithContext(t.Context(), tt.method, tt.path, nil)
+			router.ServeHTTP(httptest.NewRecorder(), req)
 
 			line := decodeLogLine(t, &buf)
 			if line["msg"] != "http request" {
@@ -71,8 +72,8 @@ func TestRequestLogger_ServerErrorIsLoggedAsError(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	})
 
-	RequestLogger(newBufferLogger(&buf))(failing).
-		ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
+	RequestLogger(newBufferLogger(&buf))(failing).ServeHTTP(httptest.NewRecorder(), req)
 
 	line := decodeLogLine(t, &buf)
 	if line["level"] != "ERROR" {

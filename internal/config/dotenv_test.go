@@ -21,7 +21,9 @@ func TestLoadDotEnv_SetsVariablesFromFile(t *testing.T) {
 	const key = "DOTENV_TEST_NEW_VAR"
 	// Make sure the variable starts unset, and is unset again after the test.
 	t.Setenv(key, "")
-	os.Unsetenv(key)
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := LoadDotEnv(writeFile(t, key+"=from-file\n")); err != nil {
 		t.Fatalf("unexpected error: %v", err)

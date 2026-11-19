@@ -9,7 +9,7 @@ import (
 )
 
 func TestHealth(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
 
 	// DiscardHandler drops all log output; this test only checks the response.
