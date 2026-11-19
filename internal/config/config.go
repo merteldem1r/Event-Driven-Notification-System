@@ -14,8 +14,9 @@ import (
 
 // Config holds the service settings.
 type Config struct {
-	HTTPPort int
-	LogLevel slog.Level
+	HTTPPort    int
+	LogLevel    slog.Level
+	DatabaseURL string
 }
 
 // LoadDotEnv loads variables from a local env file if it exists.
@@ -40,7 +41,12 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("LOG_LEVEL must be debug, info, warn or error: %w", err)
 	}
 
-	return Config{HTTPPort: port, LogLevel: level}, nil
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		return Config{}, errors.New("DATABASE_URL is required")
+	}
+
+	return Config{HTTPPort: port, LogLevel: level, DatabaseURL: dbURL}, nil
 }
 
 func getEnv(key, fallback string) string {

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/config"
+	"github.com/merteldem1r/Event-Driven-Notification-System/internal/database"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/handler"
 )
 
@@ -37,9 +38,19 @@ func run() error {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
 	slog.SetDefault(logger)
 
+	// Fail fast if the database isn't reachable at startup.
+	connectCtx, cancelConnect := context.WithTimeout(context.Background(), 10*time.Second)
+	db, err := database.Connect(connectCtx, cfg.DatabaseURL)
+	cancelConnect()
+	if err != nil {
+		return err
+	}
+	defer db.Close() // runs last, after the server has shut down
+	slog.Info("connected to database")
+
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.HTTPPort),
-		Handler: handler.NewRouter(logger),
+		Handler: handler.NewRouter(logger, db),
 		// Protect against slow or stuck clients.
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,

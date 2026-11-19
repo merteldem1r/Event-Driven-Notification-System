@@ -9,7 +9,7 @@ is tested. Then we stop, explain it, and the user commits it.
 
 Status: `[x]` done, `[ ]` not done. The next step is marked **(next)**.
 
-> **Current position:** Phase 3, step **3.1** (pgx connection pool, `DATABASE_URL`, `/health` checks the DB).
+> **Current position:** Phase 3, step **3.2** (golang-migrate + first migration).
 
 ---
 
@@ -33,8 +33,8 @@ Goal: a running service in Docker with the basic tooling around it.
 
 ## Phase 3 · Database
 Goal: the schema exists and Go code can read/write it, tested against a real Postgres.
-- [ ] 3.1 pgx connection pool, `DATABASE_URL` config, `/health` checks the DB **(next)**
-- [ ] 3.2 golang-migrate as a one-off compose service; first migration (`notifications` table with queue columns)
+- [x] 3.1 pgx connection pool, `DATABASE_URL` config (required), API fails fast without a database, `/health` checks the DB (200/503)
+- [ ] 3.2 golang-migrate as a one-off compose service; first migration (`notifications` table with queue columns) **(next)**
 - [ ] 3.3 Repository: insert + get by ID; integration tests with testcontainers
 
 **Verify:** migrations run on `docker compose up`; repository tests pass against a real database.

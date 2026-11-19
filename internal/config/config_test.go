@@ -1,10 +1,76 @@
 package config
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestLoad(t *testing.T) {
+	const dbURL = "postgres://localhost:5432/db"
+
+	tests := []struct {
+		name    string
+		env     map[string]string
+		want    Config
+		wantErr string
+	}{
+		{
+			name: "defaults",
+			env:  map[string]string{"DATABASE_URL": dbURL},
+			want: Config{HTTPPort: 8080, LogLevel: slog.LevelInfo, DatabaseURL: dbURL},
+		},
+		{
+			name: "custom values",
+			env:  map[string]string{"DATABASE_URL": dbURL, "HTTP_PORT": "9000", "LOG_LEVEL": "debug"},
+			want: Config{HTTPPort: 9000, LogLevel: slog.LevelDebug, DatabaseURL: dbURL},
+		},
+		{
+			name:    "missing database url",
+			env:     map[string]string{},
+			wantErr: "DATABASE_URL is required",
+		},
+		{
+			name:    "invalid port",
+			env:     map[string]string{"DATABASE_URL": dbURL, "HTTP_PORT": "abc"},
+			wantErr: "HTTP_PORT must be a number",
+		},
+		{
+			name:    "invalid log level",
+			env:     map[string]string{"DATABASE_URL": dbURL, "LOG_LEVEL": "loud"},
+			wantErr: "LOG_LEVEL must be",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Start from a clean slate: empty values count as unset.
+			for _, key := range []string{"HTTP_PORT", "LOG_LEVEL", "DATABASE_URL"} {
+				t.Setenv(key, "")
+			}
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
+
+			got, err := Load()
+
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("error = %v, want it to contain %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("got %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
 
 // writeEnvFile creates a temporary env file with the given content.
 func writeEnvFile(t *testing.T, content string) string {

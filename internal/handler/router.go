@@ -10,14 +10,14 @@ import (
 )
 
 // NewRouter builds the HTTP router.
-func NewRouter(logger *slog.Logger) http.Handler {
+func NewRouter(logger *slog.Logger, db Pinger) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(RequestLogger(logger)) // outermost, so it also logs 500s from Recoverer
 	r.Use(middleware.Recoverer)  // panic -> 500 instead of a crash
 
 	// Operational endpoints stay outside the versioned API.
-	r.Get("/health", Health)
+	r.Get("/health", Health(db, logger))
 
 	r.Route("/api/v1", func(r chi.Router) {
 		// Notification routes are added in Phase 4.
