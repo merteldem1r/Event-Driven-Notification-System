@@ -19,6 +19,7 @@ type NotificationService interface {
 	CreateBatch(ctx context.Context, ns []domain.Notification, idempotencyKey *string) (_ domain.Batch, replayed bool, _ error)
 	Get(ctx context.Context, id uuid.UUID) (domain.Notification, error)
 	GetBatch(ctx context.Context, batchID uuid.UUID) (domain.BatchSummary, error)
+	List(ctx context.Context, f domain.ListFilter) (domain.Page, error)
 }
 
 // Idempotency headers (D12), as in the IETF draft and common APIs.

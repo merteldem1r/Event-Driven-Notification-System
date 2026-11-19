@@ -158,6 +158,57 @@ func (r *Notifications) GetByIdempotencyKey(ctx context.Context, key string) (do
 	return n, nil
 }
 
+// List returns one page of notifications matching f, newest first (D6: cursor pagination).
+func (r *Notifications) List(ctx context.Context, f domain.ListFilter) (domain.Page, error) {
+	var afterTime *time.Time
+	var afterID *uuid.UUID
+	if f.After != nil {
+		afterTime, afterID = &f.After.CreatedAt, &f.After.ID
+	}
+
+	// A NULL parameter switches its condition off, so one static query serves every filter mix.
+	// "(created_at, id) < cursor" continues right after the previous page by walking the
+	// (created_at, id) index, so every page costs the same, however deep.
+	// One extra row is fetched to learn whether there is a next page.
+	rows, err := r.db.Query(ctx, `
+		SELECT `+notificationColumns+`
+		FROM notifications
+		WHERE ($1::text IS NULL OR status = $1)
+		  AND ($2::text IS NULL OR channel = $2)
+		  AND ($3::uuid IS NULL OR batch_id = $3)
+		  AND ($4::timestamptz IS NULL OR created_at >= $4)
+		  AND ($5::timestamptz IS NULL OR created_at < $5)
+		  AND ($6::timestamptz IS NULL OR (created_at, id) < ($6, $7::uuid))
+		ORDER BY created_at DESC, id DESC
+		LIMIT $8`,
+		f.Status, f.Channel, f.BatchID, f.From, f.To, afterTime, afterID, f.Limit+1,
+	)
+	if err != nil {
+		return domain.Page{}, fmt.Errorf("list notifications: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]domain.Notification, 0, f.Limit+1)
+	for rows.Next() {
+		n, err := scanNotification(rows)
+		if err != nil {
+			return domain.Page{}, fmt.Errorf("scan notification: %w", err)
+		}
+		items = append(items, n)
+	}
+	if err := rows.Err(); err != nil {
+		return domain.Page{}, fmt.Errorf("list notifications: %w", err)
+	}
+
+	page := domain.Page{Items: items}
+	if len(items) > f.Limit { // the extra row exists: there is a next page
+		page.Items = items[:f.Limit]
+		last := page.Items[f.Limit-1]
+		page.Next = &domain.Cursor{CreatedAt: last.CreatedAt, ID: last.ID}
+	}
+	return page, nil
+}
+
 // BatchSummary counts the notifications of a batch per status, or returns domain.ErrNotFound.
 func (r *Notifications) BatchSummary(ctx context.Context, batchID uuid.UUID) (domain.BatchSummary, error) {
 	// One row per status present; served by the batch_id index.

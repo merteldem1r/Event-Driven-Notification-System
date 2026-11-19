@@ -15,7 +15,7 @@
 | D3 | Tooling (router, DB library, migrations, logging, tests, …) | **Now** (quick confirm) | Decided: as recommended |
 | D4 | Validation rules and content limits per channel | Phase 4 (create API) | Decided: see D4 below |
 | D5 | Batch validation: all-or-nothing vs partial | Phase 5 (batch API) | Decided: all-or-nothing |
-| D6 | Pagination: offset vs cursor | Phase 5 (list API) | Later |
+| D6 | Pagination: offset vs cursor | Phase 5 (list API) | Decided: cursor |
 | D7 | Priority strategy: strict vs weighted | Phase 6 (worker) | Later |
 | D8 | Retry numbers: attempts, delays, lease time | Phase 8 (retries) | Later |
 | D9 | Default provider in docker-compose: mock vs webhook.site | Phase 2/6 | Later |
@@ -236,6 +236,31 @@ a well-formed but non-existent number passes validation. Segment counting can be
 
 ---
 
+## D6 — Pagination
+
+The list endpoint returns notifications newest first, a page at a time. The table is large and
+grows constantly at the newest end, which is the case offset pagination handles worst:
+
+- **Offset** (`?page=3`): Postgres reads and discards every row before the page, so deep pages get
+  slower; and rows arriving between requests push older rows into the next page (duplicates) or
+  past it (gaps).
+- **Cursor** (`?cursor=...`): the client sends back the position of the last row it saw, and the
+  query continues from there with `WHERE (created_at, id) < (cursor)` on an index over
+  `(created_at, id)`. Every page costs the same; new rows are newer than any cursor, so they never
+  shift later pages. There is no "jump to page N".
+
+Measured on 100,000 rows at page 1,801 (limit 50): offset read 90,050 index entries (12.6 ms),
+the cursor read 50 (0.06 ms).
+
+Details: the cursor is base64url of `{created_at, id}` in UTC, opaque to clients; `id` breaks ties
+(a batch shares one `created_at`); `limit` 1 to 100, default 50; one extra row is fetched to know
+whether a next page exists; no total count, since `count(*)` over a large table on every request
+is expensive and `GET /batches/{id}` already counts a batch. Filters (`status`, `channel`,
+`batch_id`, `from` inclusive, `to` exclusive) are optional and combine with AND; one static query
+switches each off with `$n IS NULL OR ...`.
+
+---
+
 ## D12 — Idempotency key
 
 Decided in Phase 4. **Problem:** a client can't tell a lost request from a lost response, so it
@@ -298,6 +323,7 @@ handled in Phase 8.
 | D3 | Tooling | **chi, pgx v5 + hand-written SQL, golang-migrate, log/slog, prometheus/client_golang, env-var config, testing + testcontainers-go, hand-written OpenAPI, cmd/api + cmd/worker** | Standard, small, explainable Go choices | — | 2026-11-19 |
 | D4 | Validation rules | **Per-channel character caps** (SMS 1,600, push 500, email 100,000); E.164 / `net/mail` / token-shape recipient checks; priority defaults to `normal`; all field errors returned at once | Simple, standard library only, matches real provider limits; one response lists every problem (useful for batches) | Segment and cost counting; checking that recipients really exist | 2026-11-20 |
 | D5 | Batch create | **All-or-nothing:** any invalid item → `400` naming every invalid item by position (`notifications[3].recipient`), nothing saved; 1 to 1,000 items, 10 MB body cap; response `202 {batch_id, count, ids}` (ids in request order) + `Location`; one `INSERT ... SELECT FROM unnest(...)` statement; batch idempotency as its own step | A batch fully exists or not at all, so retries and batch status stay simple; validation errors are client bugs to fix, not skip; one statement is atomic and fast (1,000 rows in ~50 ms) | Partial acceptance of the valid items | 2026-11-20 |
+| D6 | Pagination | **Cursor (keyset):** opaque `next_cursor` encoding `(created_at, id)`, newest first, `limit` 1 to 100 (default 50), no total count; index `(created_at, id)` built `CONCURRENTLY` | Every page costs the same at any depth (~200x less work than offset at page 1,801 of 100k rows); pages don't shift while new notifications arrive | Jumping to page N; a total count in the response | 2026-11-20 |
 | D10 | Local `.env.local` loading | **godotenv**, via `config.LoadDotEnv` at startup; missing file ignored; never overrides existing variables | Works with `make run-api`, plain `go run` and the IDE debugger; real environment wins over the file; no effect in Docker/production (file not in the image) | One small dependency; one local-only line in startup code (alternative was loading it in the Makefile) | 2026-11-19 |
 | D11 | API conventions | **Own error envelope** `{"error": {code, message, details}}` for every error; **202 returns the full notification** plus a `Location` header; **unknown JSON fields are rejected** with 400 | One simple, readable error shape with stable codes; create and get share one response shape; typos surface immediately | The RFC 9457 Problem Details standard; tolerance for clients that send extra fields | 2026-11-20 |
 | D12 | Idempotency key | **Optional `Idempotency-Key` header** (1 to 255 visible ASCII); repeat with the same request → original `202` + `Idempotent-Replayed: true`; repeat with a different request → `422 idempotency_key_reused`; key used while its row exists; `INSERT ... ON CONFLICT DO NOTHING` | Retries become safe for clients; key reuse bugs surface; the unique index makes it race-free across API instances | Key expiry and per-client scopes | 2026-11-20 |

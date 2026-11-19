@@ -30,6 +30,88 @@ tags:
 
 paths:
   /api/v1/notifications:
+    get:
+      tags: [notifications]
+      operationId: listNotifications
+      summary: List notifications
+      description: |
+        Notifications matching the filters, newest first, one page at a time (cursor pagination).
+        Notifications created at the same moment (e.g. one batch) are ordered by `id`.
+        All filters are optional and combine with AND. To get the next page, send the response's
+        `next_cursor` back as `cursor` with the same filters; it is absent on the last page.
+        Pages stay stable while new notifications arrive: newer rows never shift later pages.
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/Status"
+        - name: channel
+          in: query
+          schema:
+            $ref: "#/components/schemas/Channel"
+        - name: batch_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: from
+          in: query
+          description: Created at or after this time (RFC 3339).
+          schema:
+            type: string
+            format: date-time
+          example: "2026-11-20T00:00:00Z"
+        - name: to
+          in: query
+          description: Created before this time (RFC 3339). Must be after `from`.
+          schema:
+            type: string
+            format: date-time
+          example: "2026-11-21T00:00:00Z"
+        - name: limit
+          in: query
+          description: Page size.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: cursor
+          in: query
+          description: The `next_cursor` of the previous page, unchanged. Opaque.
+          schema:
+            type: string
+        - $ref: "#/components/parameters/CorrelationID"
+      responses:
+        "200":
+          description: One page of notifications, newest first.
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationList"
+        "400":
+          description: A query parameter is invalid (`validation_failed`); every invalid parameter is listed.
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: validation_failed
+                  message: the request has invalid fields
+                  details:
+                    - field: limit
+                      message: must be 1 to 100
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
     post:
       tags: [notifications]
       operationId: createNotification
@@ -551,6 +633,19 @@ components:
         total: 1000
         counts: {pending: 412, processing: 8, sent: 571, failed: 9, cancelled: 0}
         created_at: "2026-11-20T10:00:00Z"
+
+    NotificationList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/Notification"
+        next_cursor:
+          type: string
+          description: Send as `cursor` to get the next page. Absent on the last page.
 
     Notification:
       type: object

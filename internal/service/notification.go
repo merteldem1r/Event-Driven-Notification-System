@@ -19,6 +19,7 @@ type NotificationStore interface {
 	GetByIdempotencyKey(ctx context.Context, key string) (domain.Notification, error)
 	GetByIdempotencyKeys(ctx context.Context, keys []string) ([]domain.Notification, error)
 	BatchSummary(ctx context.Context, batchID uuid.UUID) (domain.BatchSummary, error)
+	List(ctx context.Context, f domain.ListFilter) (domain.Page, error)
 }
 
 // Notifications implements the notification use cases.
@@ -140,4 +141,17 @@ func (s *Notifications) Get(ctx context.Context, id uuid.UUID) (domain.Notificat
 // or an error wrapping domain.ErrNotFound.
 func (s *Notifications) GetBatch(ctx context.Context, batchID uuid.UUID) (domain.BatchSummary, error) {
 	return s.store.BatchSummary(ctx, batchID) // the repository already wraps the error with the ID
+}
+
+// List returns one page of notifications matching f, newest first.
+// An invalid filter returns a *domain.ValidationError.
+func (s *Notifications) List(ctx context.Context, f domain.ListFilter) (domain.Page, error) {
+	if err := f.Validate(); err != nil {
+		return domain.Page{}, err
+	}
+	page, err := s.store.List(ctx, f)
+	if err != nil {
+		return domain.Page{}, fmt.Errorf("list notifications: %w", err)
+	}
+	return page, nil
 }

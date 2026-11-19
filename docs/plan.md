@@ -9,7 +9,7 @@ is tested. Then we stop, explain it, and the user commits it.
 
 Status: `[x]` done, `[ ]` not done. The next step is marked **(next)**.
 
-> **Current position:** Phase 5, step **5.4** (list with filters and pagination, decide D6).
+> **Current position:** Phase 5, step **5.5** (cancel a pending notification).
 
 ---
 
@@ -56,8 +56,8 @@ Goal: the schema exists and Go code can read/write it, tested against a real Pos
 - [x] 5.1 Batch create (D5): `POST /api/v1/notifications/batch`, 1 to 1,000 items, all-or-nothing validation with positional errors, one `unnest` insert statement, `202 {batch_id, count, ids}` (API-2, IMP-8)
 - [x] 5.2 Batch idempotency: `Idempotency-Key` on batches, item keys `<key>#<i>`, insert in a transaction rolled back if any key is taken; replay only for the same items and count (PROC-5)
 - [x] 5.3 `GET /api/v1/batches/{id}`: total and a count per status (zeros included), one `GROUP BY` on the batch index; unknown → `404`, malformed → `400` (API-4)
-- [ ] 5.4 List with filters + pagination (decide D6) (API-6, API-7) **(next)**
-- [ ] 5.5 Cancel with a conditional update (API-5, IMP-4)
+- [x] 5.4 `GET /api/v1/notifications`: filters `status`, `channel`, `batch_id`, `from`/`to`; cursor pagination (D6) on a new `(created_at, id)` index (API-6, API-7)
+- [ ] 5.5 Cancel with a conditional update (API-5, IMP-4) **(next)**
 
 ## Phase 6 · Worker: the end-to-end flow
 - [ ] 6.1 `cmd/worker` skeleton with graceful shutdown

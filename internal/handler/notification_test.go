@@ -26,6 +26,7 @@ type fakeNotificationService struct {
 	got      domain.Notification
 	gotBatch []domain.Notification
 	gotKey   *string // batch idempotency key
+	gotList  *domain.ListFilter
 }
 
 var (
@@ -76,6 +77,24 @@ func (f *fakeNotificationService) GetBatch(_ context.Context, id uuid.UUID) (dom
 		ID: fakeBatchID, Total: 10, CreatedAt: fakeCreatedAt,
 		Counts: map[domain.Status]int{domain.StatusPending: 3, domain.StatusSent: 6, domain.StatusFailed: 1},
 	}, nil
+}
+
+// fakeCursor is the position List reports after its first page.
+var fakeCursor = domain.Cursor{CreatedAt: fakeCreatedAt.UTC(), ID: fakeID} // cursors carry UTC
+
+// List returns one notification; a first page (no cursor) also has a next page.
+func (f *fakeNotificationService) List(_ context.Context, filter domain.ListFilter) (domain.Page, error) {
+	f.calls++
+	f.gotList = &filter
+	if f.err != nil {
+		return domain.Page{}, f.err
+	}
+	n, _ := f.Get(context.Background(), fakeID) // can't fail for fakeID
+	page := domain.Page{Items: []domain.Notification{n}}
+	if filter.After == nil {
+		page.Next = &fakeCursor
+	}
+	return page, nil
 }
 
 // Get knows only fakeID, as a sent notification.

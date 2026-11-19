@@ -13,8 +13,9 @@ import (
 
 // fakeStore stands in for the repository and records what it was asked to save.
 type fakeStore struct {
-	err   error
-	saved []domain.Notification
+	err    error
+	saved  []domain.Notification
+	listed []domain.ListFilter // filters List was called with
 }
 
 func (f *fakeStore) Create(_ context.Context, n domain.Notification) (domain.Notification, error) {
@@ -91,6 +92,11 @@ func (f *fakeStore) BatchSummary(_ context.Context, batchID uuid.UUID) (domain.B
 		return domain.BatchSummary{}, domain.ErrNotFound
 	}
 	return summary, nil
+}
+
+func (f *fakeStore) List(_ context.Context, filter domain.ListFilter) (domain.Page, error) {
+	f.listed = append(f.listed, filter)
+	return domain.Page{Items: f.saved}, nil
 }
 
 func validNotification() domain.Notification {
@@ -320,5 +326,24 @@ func TestGetBatch(t *testing.T) {
 	}
 	if _, err := svc.GetBatch(t.Context(), uuid.New()); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("GetBatch(unknown) err = %v, want domain.ErrNotFound", err)
+	}
+}
+
+func TestList(t *testing.T) {
+	store := &fakeStore{}
+	svc := NewNotifications(store)
+
+	if _, err := svc.List(t.Context(), domain.ListFilter{Limit: domain.DefaultListLimit}); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+
+	// An invalid filter never reaches the store.
+	_, err := svc.List(t.Context(), domain.ListFilter{Limit: 0})
+	var ve *domain.ValidationError
+	if !errors.As(err, &ve) {
+		t.Errorf("err = %v, want a *domain.ValidationError", err)
+	}
+	if len(store.listed) != 1 {
+		t.Errorf("store.List called %d times, want 1", len(store.listed))
 	}
 }

@@ -7,9 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -444,5 +446,143 @@ func TestBatchSummaryNotFound(t *testing.T) {
 	_, err := NewNotifications(testDB).BatchSummary(t.Context(), uuid.New())
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("err = %v, want domain.ErrNotFound", err)
+	}
+}
+
+// insertAt stores a notification with a chosen creation time, so tests control the order.
+func insertAt(t *testing.T, batchID uuid.UUID, createdAt time.Time, status domain.Status, channel domain.Channel) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	err := testDB.QueryRow(t.Context(), `
+		INSERT INTO notifications (batch_id, channel, recipient, content, priority, status, created_at)
+		VALUES ($1, $2, 'r', 'c', 2, $3, $4) RETURNING id`,
+		batchID, channel, status, createdAt).Scan(&id)
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	return id
+}
+
+// listAll walks every page and returns the IDs in order. The batch filter keeps other tests' rows out.
+func listAll(t *testing.T, f domain.ListFilter) (ids []uuid.UUID, pages int) {
+	t.Helper()
+	repo := NewNotifications(testDB)
+	for {
+		page, err := repo.List(t.Context(), f)
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		pages++
+		for _, n := range page.Items {
+			ids = append(ids, n.ID)
+		}
+		if page.Next == nil {
+			return ids, pages
+		}
+		f.After = page.Next
+	}
+}
+
+func TestList_PagesNewestFirst(t *testing.T) {
+	batchID := uuid.New()
+	base := time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC)
+	var want []uuid.UUID
+	for i := range 7 { // oldest first
+		want = append(want, insertAt(t, batchID, base.Add(time.Duration(i)*time.Minute), domain.StatusPending, domain.ChannelSMS))
+	}
+	slices.Reverse(want) // the list is newest first
+
+	got, pages := listAll(t, domain.ListFilter{BatchID: &batchID, Limit: 3})
+	if !slices.Equal(got, want) {
+		t.Errorf("ids = %v\nwant  %v", got, want)
+	}
+	if pages != 3 { // 3 + 3 + 1
+		t.Errorf("pages = %d, want 3", pages)
+	}
+}
+
+// Rows with the same created_at are ordered by id, and paging across them loses nothing.
+func TestList_TiesOnCreatedAt(t *testing.T) {
+	batchID := uuid.New()
+	same := time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC)
+	inserted := map[uuid.UUID]bool{}
+	for range 5 {
+		inserted[insertAt(t, batchID, same, domain.StatusPending, domain.ChannelSMS)] = true
+	}
+
+	got, _ := listAll(t, domain.ListFilter{BatchID: &batchID, Limit: 2})
+	if len(got) != 5 {
+		t.Fatalf("got %d rows, want 5", len(got))
+	}
+	seen := map[uuid.UUID]bool{}
+	for i, id := range got {
+		if !inserted[id] || seen[id] {
+			t.Errorf("row %d (%s) is unknown or a duplicate", i, id)
+		}
+		seen[id] = true
+		if i > 0 && id.String() > got[i-1].String() {
+			t.Errorf("row %d is not in descending id order", i)
+		}
+	}
+}
+
+// New rows arriving while a client pages are newer than its cursor, so they never shift later pages.
+func TestList_StableWhileRowsArrive(t *testing.T) {
+	batchID := uuid.New()
+	base := time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC)
+	for i := range 4 {
+		insertAt(t, batchID, base.Add(time.Duration(i)*time.Minute), domain.StatusPending, domain.ChannelSMS)
+	}
+	repo := NewNotifications(testDB)
+	first, err := repo.List(t.Context(), domain.ListFilter{BatchID: &batchID, Limit: 2})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+
+	insertAt(t, batchID, base.Add(time.Hour), domain.StatusPending, domain.ChannelSMS) // arrives mid-paging
+
+	second, err := repo.List(t.Context(), domain.ListFilter{BatchID: &batchID, Limit: 2, After: first.Next})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(second.Items) != 2 || second.Next != nil {
+		t.Fatalf("second page has %d items (next %v), want the 2 older rows and no next page", len(second.Items), second.Next)
+	}
+	for _, n := range second.Items {
+		if n.ID == first.Items[0].ID || n.ID == first.Items[1].ID {
+			t.Errorf("row %s appeared on both pages", n.ID)
+		}
+	}
+}
+
+func TestList_Filters(t *testing.T) {
+	batchID := uuid.New()
+	base := time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC)
+	failedSMS := insertAt(t, batchID, base, domain.StatusFailed, domain.ChannelSMS)
+	sentSMS := insertAt(t, batchID, base.Add(time.Minute), domain.StatusSent, domain.ChannelSMS)
+	failedEmail := insertAt(t, batchID, base.Add(2*time.Minute), domain.StatusFailed, domain.ChannelEmail)
+	from, to := base.Add(30*time.Second), base.Add(90*time.Second)
+
+	tests := []struct {
+		name   string
+		filter domain.ListFilter
+		want   []uuid.UUID
+	}{
+		{"status", domain.ListFilter{Status: ptr(domain.StatusFailed)}, []uuid.UUID{failedEmail, failedSMS}},
+		{"channel", domain.ListFilter{Channel: ptr(domain.ChannelSMS)}, []uuid.UUID{sentSMS, failedSMS}},
+		{"status and channel", domain.ListFilter{Status: ptr(domain.StatusFailed), Channel: ptr(domain.ChannelSMS)},
+			[]uuid.UUID{failedSMS}},
+		{"from inclusive", domain.ListFilter{From: &base}, []uuid.UUID{failedEmail, sentSMS, failedSMS}},
+		{"to exclusive", domain.ListFilter{To: ptr(base.Add(time.Minute))}, []uuid.UUID{failedSMS}},
+		{"date range", domain.ListFilter{From: &from, To: &to}, []uuid.UUID{sentSMS}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.filter.BatchID, tt.filter.Limit = &batchID, 10
+			got, _ := listAll(t, tt.filter)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("ids = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

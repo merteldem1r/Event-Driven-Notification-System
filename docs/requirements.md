@@ -19,8 +19,8 @@ Status values: **Done**, **Partial**, **Todo**.
 | API-3 | Query notification status by ID | Done | 4 | `GET /api/v1/notifications/{id}`; 404 if unknown, 400 if the ID is not a UUID |
 | API-4 | Query status by batch ID | Done | 5 | `GET /api/v1/batches/{id}`: total and counts per status |
 | API-5 | Cancel pending notifications | Todo | 5 | Atomic: only if still `pending`/`scheduled` |
-| API-6 | List notifications with filters (status, channel, date range) | Todo | 5 | |
-| API-7 | Pagination on the list endpoint | Todo | 5 | Offset vs cursor is decision D6 |
+| API-6 | List notifications with filters (status, channel, date range) | Done | 5 | `GET /api/v1/notifications`; also `batch_id`; all errors at once |
+| API-7 | Pagination on the list endpoint | Done | 5 | Cursor pagination (D6), stable under inserts |
 
 ## 2. Processing Engine
 

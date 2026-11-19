@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestValidate(t *testing.T) {
@@ -195,6 +196,51 @@ func TestValidateBatch(t *testing.T) {
 			var ve *ValidationError
 			if !errors.As(err, &ve) {
 				t.Fatalf("ValidateBatch = %v, want a *ValidationError", err)
+			}
+			var got []string
+			for _, f := range ve.Fields {
+				got = append(got, f.Field)
+			}
+			if !slices.Equal(got, tt.wantFields) {
+				t.Errorf("invalid fields = %v, want %v", got, tt.wantFields)
+			}
+		})
+	}
+}
+
+func TestListFilterValidate(t *testing.T) {
+	now := time.Now()
+	earlier := now.Add(-time.Hour)
+
+	tests := []struct {
+		name       string
+		filter     ListFilter
+		wantFields []string // nil means valid
+	}{
+		{"defaults only", ListFilter{Limit: DefaultListLimit}, nil},
+		{"every filter", ListFilter{
+			Status: ptr(StatusFailed), Channel: ptr(ChannelSMS), From: &earlier, To: &now, Limit: MaxListLimit,
+		}, nil},
+		{"unknown status", ListFilter{Status: ptr(Status("lost")), Limit: 10}, []string{"status"}},
+		{"unknown channel", ListFilter{Channel: ptr(Channel("fax")), Limit: 10}, []string{"channel"}},
+		{"to before from", ListFilter{From: &now, To: &earlier, Limit: 10}, []string{"to"}},
+		{"to equals from", ListFilter{From: &now, To: &now, Limit: 10}, []string{"to"}},
+		{"limit 0", ListFilter{Limit: 0}, []string{"limit"}},
+		{"limit too big", ListFilter{Limit: MaxListLimit + 1}, []string{"limit"}},
+		{"several at once", ListFilter{Status: ptr(Status("lost")), Limit: 0}, []string{"status", "limit"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.filter.Validate()
+			if tt.wantFields == nil {
+				if err != nil {
+					t.Fatalf("Validate = %v, want nil", err)
+				}
+				return
+			}
+			var ve *ValidationError
+			if !errors.As(err, &ve) {
+				t.Fatalf("Validate = %v, want a *ValidationError", err)
 			}
 			var got []string
 			for _, f := range ve.Fields {

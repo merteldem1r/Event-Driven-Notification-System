@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/mail"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -122,6 +123,9 @@ const (
 	MaxIdempotencyKeyLength = 255 // D12
 
 	MaxBatchSize = 1000 // notifications per batch request
+
+	DefaultListLimit = 50 // page size when the client doesn't choose one
+	MaxListLimit     = 100
 )
 
 // contentLimits is the maximum content length per channel.
@@ -268,4 +272,54 @@ func (n Notification) SameRequest(other Notification) bool {
 		n.Recipient == other.Recipient &&
 		n.Content == other.Content &&
 		n.Priority == other.Priority
+}
+
+// Cursor marks a position in the newest-first list: the last notification of a page.
+type Cursor struct {
+	CreatedAt time.Time
+	ID        uuid.UUID // breaks ties between equal CreatedAt
+}
+
+// ListFilter selects notifications for a list page. Nil fields don't filter.
+type ListFilter struct {
+	Status  *Status
+	Channel *Channel
+	BatchID *uuid.UUID
+	From    *time.Time // created at or after
+	To      *time.Time // created before
+	After   *Cursor    // continue after this position (D6)
+	Limit   int
+}
+
+// Page is one page of a list, newest first. Next is nil on the last page.
+type Page struct {
+	Items []Notification
+	Next  *Cursor
+}
+
+// Validate checks the filter's values and returns a *ValidationError if any are invalid.
+func (f ListFilter) Validate() error {
+	var errs []FieldError
+	if f.Status != nil && !slices.Contains(Statuses, *f.Status) {
+		names := make([]string, len(Statuses))
+		for i, s := range Statuses {
+			names[i] = string(s)
+		}
+		errs = append(errs, FieldError{Field: "status", Message: "must be one of " + strings.Join(names, ", ")})
+	}
+	if f.Channel != nil {
+		if _, ok := contentLimits[*f.Channel]; !ok {
+			errs = append(errs, FieldError{Field: "channel", Message: "must be sms, email or push"})
+		}
+	}
+	if f.From != nil && f.To != nil && !f.From.Before(*f.To) {
+		errs = append(errs, FieldError{Field: "to", Message: "must be after from"})
+	}
+	if f.Limit < 1 || f.Limit > MaxListLimit {
+		errs = append(errs, FieldError{Field: "limit", Message: fmt.Sprintf("must be 1 to %d", MaxListLimit)})
+	}
+	if len(errs) > 0 {
+		return &ValidationError{Fields: errs}
+	}
+	return nil
 }

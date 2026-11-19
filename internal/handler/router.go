@@ -27,6 +27,7 @@ func NewRouter(logger *slog.Logger, db Pinger, notifications NotificationService
 	r.Get("/health", Health(db, logger))
 
 	r.Route("/api/v1", func(r chi.Router) {
+		r.Get("/notifications", ListNotifications(notifications, logger))
 		r.Post("/notifications", CreateNotification(notifications, logger))
 		r.Post("/notifications/batch", CreateNotificationBatch(notifications, logger))
 		r.Get("/notifications/{id}", GetNotification(notifications, logger))
