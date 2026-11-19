@@ -48,7 +48,7 @@ Status values: **Done**, **Partial**, **Todo**.
 | ID | Requirement | Status | Phase | Notes |
 |---|---|---|---|---|
 | OBS-1 | Real-time metrics endpoint: queue depth, success/failure rates, latency | Todo | 9 | Prometheus `/metrics` |
-| OBS-2 | Structured logging | Partial | 2, 9 | JSON logs via `slog` in the API (done); one log line per HTTP request (done); worker logs pending |
+| OBS-2 | Structured logging | Partial | 2, 9 | JSON logs via `slog` in the API and the worker (done); one log line per HTTP request (done); per-notification worker logs from 6.4 |
 | OBS-3 | Correlation IDs in logs, carried from API to worker | Partial | 4, 9 | API side done (D13): `X-Correlation-ID`, on every API log line, stored on the notification; worker logs it from Phase 6/9 |
 | OBS-4 | Health check endpoint | Partial | 2, 3 | `GET /health` checks PostgreSQL, 200/503 (done); Redis check in Phase 7 |
 
@@ -64,7 +64,7 @@ Status values: **Done**, **Partial**, **Todo**.
 
 | ID | Feature | Status | Phase | Notes |
 |---|---|---|---|---|
-| OPT-1 | Failure handling | Todo | 8 | Failed state + re-queue, circuit breaker, graceful worker shutdown |
+| OPT-1 | Failure handling | Partial | 6, 8 | Graceful worker shutdown done (finish in-flight work within a timeout); failed state + re-queue and circuit breaker in Phase 8 |
 | OPT-2 | Scheduled notifications (future delivery) | Todo | 10 | |
 | OPT-3 | Template system with variable substitution | Todo | 11 | |
 | OPT-4 | WebSocket real-time status updates | Todo | 12 | Redis pub/sub between worker and API |

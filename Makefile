@@ -1,4 +1,4 @@
-.PHONY: hooks run-api test lint check up down infra-up logs migrate-up migrate-down
+.PHONY: hooks run-api run-worker test lint check up down infra-up logs migrate-up migrate-down
 
 # Same version as CI (.github/workflows/ci.yml). Change both together.
 GOLANGCI_LINT_VERSION := v2.15.0
@@ -11,6 +11,10 @@ hooks:
 ## run-api: start the API locally (Ctrl+C to stop)
 run-api:
 	go run ./cmd/api
+
+## run-worker: start the worker locally (Ctrl+C stops it gracefully)
+run-worker:
+	go run ./cmd/worker
 
 ## test: run all tests with the race detector (repository tests need Docker running)
 test:

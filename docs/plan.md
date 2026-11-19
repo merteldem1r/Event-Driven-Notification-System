@@ -9,7 +9,7 @@ is tested. Then we stop, explain it, and the user commits it.
 
 Status: `[x]` done, `[ ]` not done. The next step is marked **(next)**.
 
-> **Current position:** Phase 6, step **6.1** (worker skeleton with graceful shutdown).
+> **Current position:** Phase 6, step **6.2** (claim query with `SKIP LOCKED` and priority, decide D7).
 
 ---
 
@@ -64,8 +64,8 @@ Goal: the schema exists and Go code can read/write it, tested against a real Pos
 **Summary:** `docs/application/06-api-batch-list-cancel.md`.
 
 ## Phase 6 · Worker: the end-to-end flow
-- [ ] 6.1 `cmd/worker` skeleton with graceful shutdown **(next)**
-- [ ] 6.2 Claim query with `SKIP LOCKED` + priority (decide D7) (PROC-1, PROC-3, IMP-2)
+- [x] 6.1 `cmd/worker` + `internal/worker`: N loops (`WORKER_CONCURRENCY`), idle polling (`WORKER_POLL_INTERVAL`), graceful shutdown on SIGINT/SIGTERM: stop taking work, let in-flight work finish within `WORKER_SHUTDOWN_TIMEOUT`, then cancel it; `make run-worker`
+- [ ] 6.2 Claim query with `SKIP LOCKED` + priority (decide D7) (PROC-1, PROC-3, IMP-2) **(next)**
 - [ ] 6.3 Provider interface, webhook.site client, local mock provider (decide D9) (PRV-1..3)
 - [ ] 6.4 Send + record result (`sent`, provider `messageId`) (RET-6)
 - [ ] 6.5 Worker service in docker-compose

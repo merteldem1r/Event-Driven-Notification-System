@@ -1,0 +1,98 @@
+// Package worker runs the loops that take notifications from the queue and process them,
+// and stops them gracefully.
+package worker
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"sync"
+	"time"
+)
+
+// ErrShutdownTimeout means in-flight work didn't finish in time and was cancelled.
+var ErrShutdownTimeout = errors.New("shutdown timeout: in-flight work was cancelled")
+
+// Processor handles one queued notification per call.
+type Processor interface {
+	// ProcessNext takes the next notification from the queue and handles it.
+	// found is false when the queue had nothing to take.
+	ProcessNext(ctx context.Context) (found bool, err error)
+}
+
+// Config controls the loops.
+type Config struct {
+	Concurrency     int           // loops running in parallel
+	PollInterval    time.Duration // wait after an empty queue or an error
+	ShutdownTimeout time.Duration // time in-flight work gets after Run's context is cancelled
+}
+
+// Worker runs Config.Concurrency loops, each calling the Processor again and again.
+type Worker struct {
+	proc   Processor
+	cfg    Config
+	logger *slog.Logger
+}
+
+// New returns a Worker. cfg is expected to be valid (config.Load checks it).
+func New(proc Processor, cfg Config, logger *slog.Logger) *Worker {
+	return &Worker{proc: proc, cfg: cfg, logger: logger}
+}
+
+// Run processes notifications until ctx is cancelled, then shuts down gracefully: no new
+// notification is taken, and those in progress get up to ShutdownTimeout to finish.
+// It returns ErrShutdownTimeout if they had to be cancelled.
+func (w *Worker) Run(ctx context.Context) error {
+	// In-flight work must not stop with the signal, only at the shutdown deadline.
+	work, cancelWork := context.WithCancel(context.WithoutCancel(ctx))
+	defer cancelWork()
+
+	var wg sync.WaitGroup
+	for i := range w.cfg.Concurrency {
+		wg.Go(func() { w.loop(ctx, work, i) })
+	}
+	w.logger.Info("worker started", "concurrency", w.cfg.Concurrency, "poll_interval", w.cfg.PollInterval.String()) // "500ms", not nanoseconds
+
+	<-ctx.Done()
+	w.logger.Info("worker stopping: finishing in-flight work", "timeout", w.cfg.ShutdownTimeout.String())
+
+	stopped := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(stopped)
+	}()
+
+	timer := time.NewTimer(w.cfg.ShutdownTimeout)
+	defer timer.Stop()
+	select {
+	case <-stopped:
+		w.logger.Info("worker stopped")
+		return nil
+	case <-timer.C:
+		cancelWork() // processors see ctx.Err() and give up
+		<-stopped
+		return ErrShutdownTimeout
+	}
+}
+
+// loop processes one notification after another until stop is cancelled.
+// stop decides whether to take more work; work is passed to the processor.
+func (w *Worker) loop(stop, work context.Context, id int) {
+	for stop.Err() == nil {
+		found, err := w.proc.ProcessNext(work)
+		if err != nil {
+			w.logger.ErrorContext(work, "processing failed", "loop", id, "error", err)
+		}
+		if found && err == nil {
+			continue // more may be waiting: don't sleep while the queue is busy
+		}
+
+		// Empty queue or an error (e.g. database down): wait, so we don't spin, but wake on stop.
+		timer := time.NewTimer(w.cfg.PollInterval)
+		select {
+		case <-stop.Done():
+		case <-timer.C:
+		}
+		timer.Stop()
+	}
+}

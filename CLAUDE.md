@@ -59,6 +59,7 @@ internal/
   database/         database connection setup
   provider/         external provider interface and implementations
   ratelimit/        shared rate limiter
+  worker/           worker loops and graceful shutdown
   logging/          request-scoped log fields (correlation ID)
 migrations/         versioned SQL schema migrations
 docs/               documentation
