@@ -9,7 +9,7 @@ is tested. Then we stop, explain it, and the user commits it.
 
 Status: `[x]` done, `[ ]` not done. The next step is marked **(next)**.
 
-> **Current position:** Phase 2, step **2.4** (docker-compose with API, PostgreSQL and Redis).
+> **Current position:** Phase 2, step **2.5** (linting + CI job for vet, lint and tests).
 
 ---
 
@@ -25,8 +25,8 @@ Goal: a running service in Docker with the basic tooling around it.
 - [x] 2.1 API server: config from env, JSON logging, chi router (`/health`, `/api/v1` group), timeouts, graceful shutdown, first test
 - [x] 2.2 Dockerfile for the API (multi-stage build, distroless non-root image, `.dockerignore`)
 - [x] 2.3 Request-logging middleware: one JSON log line per request (method, path, status, bytes, duration)
-- [ ] 2.4 `docker-compose.yml`: api + PostgreSQL + Redis, with health checks; Makefile shortcuts for full system and infra-only **(next)**
-- [ ] 2.5 Linting (golangci-lint) + CI job running vet, lint and tests
+- [x] 2.4 `docker-compose.yml`: api + PostgreSQL + Redis, with health checks and a data volume; Makefile shortcuts (`up`, `down`, `infra-up`, `logs`)
+- [ ] 2.5 Linting (golangci-lint) + CI job running vet, lint and tests **(next)**
 
 **Verify:** `docker compose up` starts everything; `GET /health` → 200; CI green.
 

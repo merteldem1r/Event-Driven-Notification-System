@@ -1,0 +1,53 @@
+# Local development stack.
+#   Whole system:          docker compose up --build -d   (make up)
+#   Only infrastructure:   docker compose up -d postgres redis   (make infra-up)
+#
+# Credentials here are for local development only.
+
+name: notification-system
+
+services:
+  api:
+    build: . # built from our Dockerfile
+    ports:
+      - "8080:8080" # your Mac:8080 -> container:8080
+    environment:
+      HTTP_PORT: "8080"
+      LOG_LEVEL: info
+    depends_on:
+      # Start the API only after both are actually ready, not just started.
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: notification
+      POSTGRES_PASSWORD: notification
+      POSTGRES_DB: notification
+    ports:
+      # 5433 on your Mac, because a local PostgreSQL may already use 5432.
+      # Containers still reach it as postgres:5432.
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data # keeps data across restarts
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notification -d notification"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres-data:

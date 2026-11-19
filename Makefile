@@ -1,6 +1,4 @@
-.PHONY: hooks run-api test docker-build docker-run
-
-IMAGE ?= notification-api
+.PHONY: hooks run-api test up down infra-up logs
 
 ## hooks: use the repo's Git hooks in .githooks (run once after cloning)
 hooks:
@@ -15,10 +13,18 @@ run-api:
 test:
 	go test ./...
 
-## docker-build: build the API Docker image
-docker-build:
-	docker build -t $(IMAGE) .
+## up: build and start the whole system in Docker (in the background)
+up:
+	docker compose up --build -d
 
-## docker-run: run the API image on port 8080 (Ctrl+C to stop)
-docker-run:
-	docker run --rm -p 8080:8080 $(IMAGE)
+## down: stop and remove all containers (database data is kept)
+down:
+	docker compose down
+
+## infra-up: start only PostgreSQL and Redis, for running the API with `make run-api`
+infra-up:
+	docker compose up -d postgres redis
+
+## logs: follow the API container logs (Ctrl+C stops following, not the API)
+logs:
+	docker compose logs -f api
