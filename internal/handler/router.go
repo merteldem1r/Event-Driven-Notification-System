@@ -2,8 +2,10 @@
 package handler
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -16,6 +18,10 @@ func NewRouter(logger *slog.Logger, db Pinger, notifications NotificationService
 	r.Use(RequestLogger(logger)) // outermost, so it also logs 500s from Recoverer
 	r.Use(middleware.Recoverer)  // panic -> 500 instead of a crash
 
+	// Unknown URLs and wrong methods use the same JSON error format as everything else (D11).
+	r.NotFound(routeNotFound)
+	r.MethodNotAllowed(methodNotAllowed(r))
+
 	// Operational endpoints stay outside the versioned API.
 	r.Get("/health", Health(db, logger))
 
@@ -25,4 +31,29 @@ func NewRouter(logger *slog.Logger, db Pinger, notifications NotificationService
 	})
 
 	return r
+}
+
+// routeNotFound answers requests for URLs that have no route.
+func routeNotFound(w http.ResponseWriter, r *http.Request) {
+	writeError(w, http.StatusNotFound, codeRouteNotFound, "no endpoint at "+r.URL.Path)
+}
+
+// methodNotAllowed answers requests whose URL exists but not with this method.
+// A custom handler loses chi's Allow header, so it asks routes which methods match.
+func methodNotAllowed(routes chi.Routes) http.HandlerFunc {
+	methods := []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		var allowed []string
+		for _, m := range methods {
+			if routes.Match(chi.NewRouteContext(), m, r.URL.Path) {
+				allowed = append(allowed, m)
+			}
+		}
+		list := strings.Join(allowed, ", ")
+
+		w.Header().Set("Allow", list) // required on 405 by RFC 9110
+		writeError(w, http.StatusMethodNotAllowed, codeMethodNotAllowed,
+			fmt.Sprintf("method %s is not allowed at %s; allowed: %s", r.Method, r.URL.Path, list))
+	}
 }

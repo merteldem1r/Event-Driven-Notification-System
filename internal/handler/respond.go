@@ -17,6 +17,8 @@ const (
 	codeInvalidID        = "invalid_id"
 	codeNotFound         = "not_found"
 	codeKeyReused        = "idempotency_key_reused"
+	codeRouteNotFound    = "route_not_found"
+	codeMethodNotAllowed = "method_not_allowed"
 	codeInternal         = "internal_error"
 )
 

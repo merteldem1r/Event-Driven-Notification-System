@@ -9,7 +9,7 @@ is tested. Then we stop, explain it, and the user commits it.
 
 Status: `[x]` done, `[ ]` not done. The next step is marked **(next)**.
 
-> **Current position:** Phase 4, step **4.5** (JSON error format for unknown routes and methods).
+> **Current position:** Phase 4, step **4.6** (correlation ID middleware).
 
 ---
 
@@ -45,8 +45,8 @@ Goal: the schema exists and Go code can read/write it, tested against a real Pos
 - [x] 4.2 Notification service; error envelope (D11); strict JSON body reading (1 MB cap, unknown fields rejected); `POST /api/v1/notifications` → `202` with the full notification and `Location`; priority defaults to `normal` (API-1, PROC-4)
 - [x] 4.3 `GET /api/v1/notifications/{id}` → `200` with the notification; unknown ID → `404 not_found`, malformed ID → `400 invalid_id` (API-3)
 - [x] 4.4 Idempotency key (D12): optional `Idempotency-Key` header; replay returns the original `202` + `Idempotent-Replayed: true`; different body → `422`; `INSERT ... ON CONFLICT DO NOTHING`; concurrency test against real Postgres (PROC-5, API level)
-- [ ] 4.5 JSON error envelope for unknown routes (`404`) and wrong methods (`405`), so every error follows D11 **(next)**
-- [ ] 4.6 Correlation ID middleware, added to every log line (OBS-3)
+- [x] 4.5 JSON error envelope for unknown routes (`404 route_not_found`) and wrong methods (`405 method_not_allowed` with an `Allow` header), so every error follows D11
+- [ ] 4.6 Correlation ID middleware, added to every log line (OBS-3) **(next)**
 - [ ] 4.7 OpenAPI spec for these endpoints (DEL-4)
 
 **Verify:** create via Postman → 202; get → `pending`; same idempotency key → same notification; invalid input → 400.
