@@ -58,10 +58,12 @@ func (r *Notifications) Create(ctx context.Context, n domain.Notification) (doma
 
 // CreateBatch inserts all notifications in one statement, so either all are saved or none.
 // It returns them as stored, in the same order as ns.
+// If any idempotency key is already taken, nothing is saved and domain.ErrIdempotencyKeyExists is returned.
 func (r *Notifications) CreateBatch(ctx context.Context, ns []domain.Notification) ([]domain.Notification, error) {
 	// One array per column; unnest turns them back into rows inside the database.
 	// IDs are generated here so results can be put back in input order: RETURNING promises no order.
 	ids := make([]uuid.UUID, len(ns))
+	keys := make([]pgtype.Text, len(ns))
 	batchIDs := make([]pgtype.UUID, len(ns))
 	correlationIDs := make([]pgtype.Text, len(ns))
 	channels := make([]string, len(ns))
@@ -70,6 +72,9 @@ func (r *Notifications) CreateBatch(ctx context.Context, ns []domain.Notificatio
 	priorities := make([]int16, len(ns))
 	for i, n := range ns {
 		ids[i] = uuid.New()
+		if n.IdempotencyKey != nil {
+			keys[i] = pgtype.Text{String: *n.IdempotencyKey, Valid: true}
+		}
 		if n.BatchID != nil {
 			batchIDs[i] = pgtype.UUID{Bytes: *n.BatchID, Valid: true}
 		}
@@ -79,11 +84,20 @@ func (r *Notifications) CreateBatch(ctx context.Context, ns []domain.Notificatio
 		channels[i], recipients[i], contents[i], priorities[i] = string(n.Channel), n.Recipient, n.Content, int16(n.Priority)
 	}
 
-	rows, err := r.db.Query(ctx, `
-		INSERT INTO notifications (id, batch_id, correlation_id, channel, recipient, content, priority)
-		SELECT * FROM unnest($1::uuid[], $2::uuid[], $3::text[], $4::text[], $5::text[], $6::text[], $7::smallint[])
+	// A transaction, so a batch whose keys are only partly taken can be undone completely.
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin batch: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op after Commit; on failure nothing is kept
+
+	// ON CONFLICT skips rows whose key is taken; a concurrent same-key batch waits here for ours.
+	rows, err := tx.Query(ctx, `
+		INSERT INTO notifications (id, idempotency_key, batch_id, correlation_id, channel, recipient, content, priority)
+		SELECT * FROM unnest($1::uuid[], $2::text[], $3::uuid[], $4::text[], $5::text[], $6::text[], $7::text[], $8::smallint[])
+		ON CONFLICT (idempotency_key) DO NOTHING
 		RETURNING `+notificationColumns,
-		ids, batchIDs, correlationIDs, channels, recipients, contents, priorities,
+		ids, keys, batchIDs, correlationIDs, channels, recipients, contents, priorities,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("insert batch: %w", err)
@@ -100,6 +114,12 @@ func (r *Notifications) CreateBatch(ctx context.Context, ns []domain.Notificatio
 	}
 	if err := rows.Err(); err != nil { // e.g. a constraint failed: the whole statement is rolled back
 		return nil, fmt.Errorf("insert batch: %w", err)
+	}
+	if len(byID) != len(ns) { // some rows were skipped: their keys were taken
+		return nil, domain.ErrIdempotencyKeyExists
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit batch: %w", err)
 	}
 
 	created := make([]domain.Notification, len(ns))
@@ -135,6 +155,36 @@ func (r *Notifications) GetByIdempotencyKey(ctx context.Context, key string) (do
 		return domain.Notification{}, fmt.Errorf("get notification by idempotency key: %w", err)
 	}
 	return n, nil
+}
+
+// GetByIdempotencyKeys returns the notifications stored under keys, in the order of keys.
+// Keys with no notification are skipped, so a shorter result means some are missing.
+func (r *Notifications) GetByIdempotencyKeys(ctx context.Context, keys []string) ([]domain.Notification, error) {
+	rows, err := r.db.Query(ctx, `SELECT `+notificationColumns+` FROM notifications WHERE idempotency_key = ANY($1)`, keys)
+	if err != nil {
+		return nil, fmt.Errorf("get notifications by idempotency keys: %w", err)
+	}
+	defer rows.Close()
+
+	byKey := make(map[string]domain.Notification, len(keys))
+	for rows.Next() {
+		n, err := scanNotification(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan notification: %w", err)
+		}
+		byKey[*n.IdempotencyKey] = n
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("get notifications by idempotency keys: %w", err)
+	}
+
+	found := make([]domain.Notification, 0, len(keys))
+	for _, k := range keys {
+		if n, ok := byKey[k]; ok {
+			found = append(found, n)
+		}
+	}
+	return found, nil
 }
 
 // scanNotification reads one row selected with notificationColumns.

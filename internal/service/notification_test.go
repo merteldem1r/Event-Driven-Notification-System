@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/google/uuid"
@@ -34,6 +35,13 @@ func (f *fakeStore) CreateBatch(_ context.Context, ns []domain.Notification) ([]
 	if f.err != nil {
 		return nil, f.err
 	}
+	for _, n := range ns { // like the unique index plus rollback: one taken key, nothing saved
+		if n.IdempotencyKey != nil {
+			if _, err := f.GetByIdempotencyKey(context.Background(), *n.IdempotencyKey); err == nil {
+				return nil, domain.ErrIdempotencyKeyExists
+			}
+		}
+	}
 	created := make([]domain.Notification, len(ns))
 	for i, n := range ns {
 		n.ID, n.Status = uuid.New(), domain.StatusPending
@@ -59,6 +67,16 @@ func (f *fakeStore) GetByIdempotencyKey(_ context.Context, key string) (domain.N
 		}
 	}
 	return domain.Notification{}, domain.ErrNotFound
+}
+
+func (f *fakeStore) GetByIdempotencyKeys(ctx context.Context, keys []string) ([]domain.Notification, error) {
+	var found []domain.Notification
+	for _, k := range keys {
+		if n, err := f.GetByIdempotencyKey(ctx, k); err == nil {
+			found = append(found, n)
+		}
+	}
+	return found, nil
 }
 
 func validNotification() domain.Notification {
@@ -185,10 +203,11 @@ func TestCreateBatch_SavesAllUnderOneBatchID(t *testing.T) {
 	store := &fakeStore{}
 	in := []domain.Notification{validNotification(), validNotification(), validNotification()}
 
-	batchID, created, err := NewNotifications(store).CreateBatch(t.Context(), in)
-	if err != nil {
-		t.Fatalf("CreateBatch: %v", err)
+	batch, replayed, err := NewNotifications(store).CreateBatch(t.Context(), in, nil)
+	if err != nil || replayed {
+		t.Fatalf("CreateBatch = replayed %v, err %v; want a new batch", replayed, err)
 	}
+	batchID, created := batch.ID, batch.Notifications
 	if batchID == uuid.Nil || len(created) != 3 || len(store.saved) != 3 {
 		t.Fatalf("batch %s, %d created, %d saved; want a batch ID and 3 of each", batchID, len(created), len(store.saved))
 	}
@@ -208,7 +227,7 @@ func TestCreateBatch_AllOrNothing(t *testing.T) {
 	bad := validNotification()
 	bad.Recipient = ""
 
-	_, _, err := NewNotifications(store).CreateBatch(t.Context(), []domain.Notification{validNotification(), bad})
+	_, _, err := NewNotifications(store).CreateBatch(t.Context(), []domain.Notification{validNotification(), bad}, nil)
 
 	var ve *domain.ValidationError
 	if !errors.As(err, &ve) || ve.Fields[0].Field != "notifications[1].recipient" {
@@ -216,5 +235,60 @@ func TestCreateBatch_AllOrNothing(t *testing.T) {
 	}
 	if len(store.saved) != 0 {
 		t.Errorf("saved %d notifications, want 0", len(store.saved))
+	}
+}
+
+func threeItems() []domain.Notification {
+	return []domain.Notification{validNotification(), validNotification(), validNotification()}
+}
+
+func TestCreateBatch_IdempotencyKeyReplay(t *testing.T) {
+	store := &fakeStore{}
+	svc := NewNotifications(store)
+	key := "campaign-7"
+
+	first, replayed, err := svc.CreateBatch(t.Context(), threeItems(), &key)
+	if err != nil || replayed {
+		t.Fatalf("first CreateBatch = replayed %v, err %v", replayed, err)
+	}
+	if got := *first.Notifications[2].IdempotencyKey; got != "campaign-7#2" {
+		t.Errorf("item key = %q, want campaign-7#2", got)
+	}
+
+	again, replayed, err := svc.CreateBatch(t.Context(), threeItems(), &key)
+	if err != nil {
+		t.Fatalf("retry CreateBatch: %v", err)
+	}
+	if !replayed || again.ID != first.ID || !reflect.DeepEqual(again.Notifications, first.Notifications) {
+		t.Errorf("retry = batch %s, replayed %v; want batch %s replayed with the same items", again.ID, replayed, first.ID)
+	}
+	if len(store.saved) != 3 {
+		t.Errorf("saved %d notifications, want 3", len(store.saved))
+	}
+}
+
+func TestCreateBatch_IdempotencyKeyReused(t *testing.T) {
+	changedItem := threeItems()
+	changedItem[1].Content = "a different message"
+
+	tests := []struct {
+		name  string
+		batch []domain.Notification
+	}{
+		{"different item", changedItem},
+		{"fewer items", threeItems()[:2]},
+		{"more items", append(threeItems(), validNotification())},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := NewNotifications(&fakeStore{})
+			key := "campaign-7"
+			if _, _, err := svc.CreateBatch(t.Context(), threeItems(), &key); err != nil {
+				t.Fatalf("first CreateBatch: %v", err)
+			}
+			if _, _, err := svc.CreateBatch(t.Context(), tt.batch, &key); !errors.Is(err, domain.ErrIdempotencyKeyReused) {
+				t.Errorf("err = %v, want domain.ErrIdempotencyKeyReused", err)
+			}
+		})
 	}
 }

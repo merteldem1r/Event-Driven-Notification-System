@@ -95,6 +95,12 @@ type Notification struct {
 	UpdatedAt time.Time
 }
 
+// Batch is a group of notifications created by one request.
+type Batch struct {
+	ID            uuid.UUID
+	Notifications []Notification // in request order
+}
+
 // Limits from decision D4, counted in characters, not bytes.
 const (
 	MaxSMSLength       = 1600    // about 10 SMS segments; the provider splits longer text
@@ -112,6 +118,12 @@ var contentLimits = map[Channel]int{
 	ChannelSMS:   MaxSMSLength,
 	ChannelEmail: MaxEmailLength,
 	ChannelPush:  MaxPushLength,
+}
+
+// invalidKeyError describes an invalid Idempotency-Key; the field is named after the header.
+var invalidKeyError = FieldError{
+	Field:   "Idempotency-Key",
+	Message: fmt.Sprintf("must be 1 to %d visible ASCII characters", MaxIdempotencyKeyLength),
 }
 
 // e164 matches an international phone number: "+", then 8 to 15 digits.
@@ -167,9 +179,8 @@ func (n Notification) Validate() error {
 		add("priority", "must be high, normal or low")
 	}
 
-	// The key comes from a header, so the field is named after it.
 	if n.IdempotencyKey != nil && !validIdempotencyKey(*n.IdempotencyKey) {
-		add("Idempotency-Key", fmt.Sprintf("must be 1 to %d visible ASCII characters", MaxIdempotencyKeyLength))
+		add(invalidKeyError.Field, invalidKeyError.Message)
 	}
 
 	if len(errs) > 0 {
@@ -178,23 +189,27 @@ func (n Notification) Validate() error {
 	return nil // a plain nil, not a nil *ValidationError, so err == nil works for callers
 }
 
-// ValidateBatch checks every notification of a batch. One invalid item makes the whole batch
-// invalid (D5). Field names say which item, e.g. "notifications[3].recipient".
-func ValidateBatch(ns []Notification) error {
-	if len(ns) == 0 || len(ns) > MaxBatchSize {
-		return &ValidationError{Fields: []FieldError{{
-			Field: "notifications", Message: fmt.Sprintf("must contain 1 to %d notifications", MaxBatchSize),
-		}}}
-	}
-
+// ValidateBatch checks every notification of a batch and the batch's optional idempotency key.
+// One invalid item makes the whole batch invalid (D5). Field names say which item,
+// e.g. "notifications[3].recipient".
+func ValidateBatch(ns []Notification, idempotencyKey *string) error {
 	var errs []FieldError
-	for i, n := range ns {
-		var ve *ValidationError
-		if errors.As(n.Validate(), &ve) {
-			for _, f := range ve.Fields {
-				errs = append(errs, FieldError{Field: fmt.Sprintf("notifications[%d].%s", i, f.Field), Message: f.Message})
+	if len(ns) == 0 || len(ns) > MaxBatchSize {
+		errs = append(errs, FieldError{
+			Field: "notifications", Message: fmt.Sprintf("must contain 1 to %d notifications", MaxBatchSize),
+		})
+	} else {
+		for i, n := range ns {
+			var ve *ValidationError
+			if errors.As(n.Validate(), &ve) {
+				for _, f := range ve.Fields {
+					errs = append(errs, FieldError{Field: fmt.Sprintf("notifications[%d].%s", i, f.Field), Message: f.Message})
+				}
 			}
 		}
+	}
+	if idempotencyKey != nil && !validIdempotencyKey(*idempotencyKey) {
+		errs = append(errs, invalidKeyError)
 	}
 	if len(errs) > 0 {
 		return &ValidationError{Fields: errs}

@@ -318,3 +318,93 @@ func TestCreateBatch_AllOrNothing(t *testing.T) {
 		t.Errorf("rows in batch = %d, want 0", n)
 	}
 }
+
+// batchWithKeys gives the items of a batch the keys <key>#0, <key>#1, ...
+func batchWithKeys(size int, key string) []domain.Notification {
+	ns := batchOf(size, uuid.New())
+	for i := range ns {
+		ns[i].IdempotencyKey = ptr(fmt.Sprintf("%s#%d", key, i))
+	}
+	return ns
+}
+
+func countKeyPrefix(t *testing.T, key string) int {
+	t.Helper()
+	var n int
+	if err := testDB.QueryRow(t.Context(),
+		`SELECT count(*) FROM notifications WHERE idempotency_key LIKE $1`, key+"#%").Scan(&n); err != nil {
+		t.Fatalf("count keys: %v", err)
+	}
+	return n
+}
+
+func TestCreateBatch_IdempotencyKeys(t *testing.T) {
+	repo := NewNotifications(testDB)
+	key := "batch-" + uuid.NewString()
+
+	first, err := repo.CreateBatch(t.Context(), batchWithKeys(3, key))
+	if err != nil {
+		t.Fatalf("first CreateBatch: %v", err)
+	}
+	if _, err := repo.CreateBatch(t.Context(), batchWithKeys(3, key)); !errors.Is(err, domain.ErrIdempotencyKeyExists) {
+		t.Fatalf("repeat err = %v, want domain.ErrIdempotencyKeyExists", err)
+	}
+
+	keys := []string{key + "#0", key + "#1", key + "#2"}
+	got, err := repo.GetByIdempotencyKeys(t.Context(), keys)
+	if err != nil {
+		t.Fatalf("GetByIdempotencyKeys: %v", err)
+	}
+	if !reflect.DeepEqual(got, first) {
+		t.Errorf("GetByIdempotencyKeys returned\n %+v\nwant\n %+v", got, first)
+	}
+	if n := countKeyPrefix(t, key); n != 3 {
+		t.Errorf("rows with the key = %d, want 3", n)
+	}
+}
+
+// A 5-item batch reusing a 3-item batch's key would insert items 3 and 4; the rollback stops that.
+func TestCreateBatch_PartlyTakenKeysSaveNothing(t *testing.T) {
+	repo := NewNotifications(testDB)
+	key := "batch-" + uuid.NewString()
+	if _, err := repo.CreateBatch(t.Context(), batchWithKeys(3, key)); err != nil {
+		t.Fatalf("first CreateBatch: %v", err)
+	}
+
+	if _, err := repo.CreateBatch(t.Context(), batchWithKeys(5, key)); !errors.Is(err, domain.ErrIdempotencyKeyExists) {
+		t.Fatalf("err = %v, want domain.ErrIdempotencyKeyExists", err)
+	}
+	if n := countKeyPrefix(t, key); n != 3 {
+		t.Errorf("rows with the key = %d, want 3 (nothing of the second batch kept)", n)
+	}
+}
+
+func TestCreateBatch_ConcurrentSameKey(t *testing.T) {
+	repo := NewNotifications(testDB)
+	key := "batch-" + uuid.NewString()
+
+	const requests, size = 10, 50
+	var inserted, conflicts atomic.Int32
+	var wg sync.WaitGroup
+	for range requests {
+		wg.Go(func() {
+			_, err := repo.CreateBatch(t.Context(), batchWithKeys(size, key))
+			switch {
+			case err == nil:
+				inserted.Add(1)
+			case errors.Is(err, domain.ErrIdempotencyKeyExists):
+				conflicts.Add(1)
+			default:
+				t.Errorf("CreateBatch: %v", err)
+			}
+		})
+	}
+	wg.Wait()
+
+	if inserted.Load() != 1 || conflicts.Load() != requests-1 {
+		t.Errorf("inserted = %d, conflicts = %d; want 1 and %d", inserted.Load(), conflicts.Load(), requests-1)
+	}
+	if n := countKeyPrefix(t, key); n != size {
+		t.Errorf("rows with the key = %d, want %d", n, size)
+	}
+}

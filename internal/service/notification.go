@@ -17,6 +17,7 @@ type NotificationStore interface {
 	CreateBatch(ctx context.Context, ns []domain.Notification) ([]domain.Notification, error)
 	GetByID(ctx context.Context, id uuid.UUID) (domain.Notification, error)
 	GetByIdempotencyKey(ctx context.Context, key string) (domain.Notification, error)
+	GetByIdempotencyKeys(ctx context.Context, keys []string) ([]domain.Notification, error)
 }
 
 // Notifications implements the notification use cases.
@@ -50,25 +51,71 @@ func (s *Notifications) Create(ctx context.Context, n domain.Notification) (_ do
 }
 
 // CreateBatch validates every notification and saves them together under a new batch ID.
-// If any is invalid, nothing is saved (D5). The result is in the same order as ns.
-func (s *Notifications) CreateBatch(ctx context.Context, ns []domain.Notification) (uuid.UUID, []domain.Notification, error) {
-	if err := domain.ValidateBatch(ns); err != nil {
-		return uuid.Nil, nil, err
+// If any is invalid, nothing is saved (D5). Notifications are returned in the order of ns.
+// With an idempotency key, a repeat of the same batch returns the stored batch with
+// replayed = true; a key reused for a different batch returns domain.ErrIdempotencyKeyReused.
+func (s *Notifications) CreateBatch(
+	ctx context.Context, ns []domain.Notification, idempotencyKey *string,
+) (_ domain.Batch, replayed bool, _ error) {
+	if err := domain.ValidateBatch(ns, idempotencyKey); err != nil {
+		return domain.Batch{}, false, err
 	}
 
 	batchID := uuid.New()
 	items := make([]domain.Notification, len(ns)) // a copy, so the caller's slice isn't changed
 	for i, n := range ns {
 		n.BatchID = &batchID
+		if idempotencyKey != nil {
+			n.IdempotencyKey = ptr(itemKey(*idempotencyKey, i))
+		}
 		items[i] = n
 	}
 
 	created, err := s.store.CreateBatch(ctx, items)
-	if err != nil {
-		return uuid.Nil, nil, fmt.Errorf("create batch: %w", err)
+	if errors.Is(err, domain.ErrIdempotencyKeyExists) {
+		return s.replayBatch(ctx, *idempotencyKey, items)
 	}
-	return batchID, created, nil
+	if err != nil {
+		return domain.Batch{}, false, fmt.Errorf("create batch: %w", err)
+	}
+	return domain.Batch{ID: batchID, Notifications: created}, false, nil
 }
+
+// itemKey derives one item's key from the batch key, reusing the unique index on single keys.
+func itemKey(batchKey string, i int) string {
+	return fmt.Sprintf("%s#%d", batchKey, i)
+}
+
+// replayBatch returns the batch already stored under batchKey, if it was created by the same
+// request: same number of items, each the same request, all in one batch.
+func (s *Notifications) replayBatch(
+	ctx context.Context, batchKey string, items []domain.Notification,
+) (domain.Batch, bool, error) {
+	// Also ask for one key past the end: item keys run from #0 without gaps,
+	// so if it exists, the stored batch is bigger than this request.
+	keys := make([]string, len(items)+1)
+	for i := range keys {
+		keys[i] = itemKey(batchKey, i)
+	}
+	existing, err := s.store.GetByIdempotencyKeys(ctx, keys)
+	if err != nil {
+		return domain.Batch{}, false, fmt.Errorf("load batch for idempotency key: %w", err)
+	}
+
+	if len(existing) != len(items) || existing[0].BatchID == nil {
+		return domain.Batch{}, false, domain.ErrIdempotencyKeyReused
+	}
+	batchID := *existing[0].BatchID
+	for i, n := range existing {
+		sameItem := *n.IdempotencyKey == keys[i] && n.SameRequest(items[i])
+		if !sameItem || n.BatchID == nil || *n.BatchID != batchID {
+			return domain.Batch{}, false, domain.ErrIdempotencyKeyReused
+		}
+	}
+	return domain.Batch{ID: batchID, Notifications: existing}, true, nil
+}
+
+func ptr[T any](v T) *T { return &v }
 
 // replay returns the notification already stored under n's idempotency key,
 // if it was created by the same request.

@@ -16,7 +16,7 @@ import (
 // NotificationService is what the notification handlers need from the service layer.
 type NotificationService interface {
 	Create(ctx context.Context, n domain.Notification) (_ domain.Notification, replayed bool, _ error)
-	CreateBatch(ctx context.Context, ns []domain.Notification) (uuid.UUID, []domain.Notification, error)
+	CreateBatch(ctx context.Context, ns []domain.Notification, idempotencyKey *string) (_ domain.Batch, replayed bool, _ error)
 	Get(ctx context.Context, id uuid.UUID) (domain.Notification, error)
 }
 
@@ -56,6 +56,15 @@ type batchCreatedResponse struct {
 	BatchID uuid.UUID   `json:"batch_id"`
 	Count   int         `json:"count"`
 	IDs     []uuid.UUID `json:"ids"` // ids[i] belongs to the request's notifications[i]
+}
+
+// idempotencyKey returns the request's Idempotency-Key, or nil if the header is missing.
+// Values (not Get) tells "missing" apart from "sent empty", which validation rejects.
+func idempotencyKey(r *http.Request) *string {
+	if keys := r.Header.Values(headerIdempotencyKey); len(keys) > 0 {
+		return &keys[0]
+	}
+	return nil
 }
 
 // correlationID returns the request's correlation ID for storing on notifications, or nil.
@@ -110,10 +119,7 @@ func CreateNotification(svc NotificationService, logger *slog.Logger) http.Handl
 		}
 
 		n := req.toDomain()
-		// Optional. Values (not Get) tells "header missing" apart from "header sent empty".
-		if keys := r.Header.Values(headerIdempotencyKey); len(keys) > 0 {
-			n.IdempotencyKey = &keys[0]
-		}
+		n.IdempotencyKey = idempotencyKey(r)
 		n.CorrelationID = correlationID(r) // stored so the worker can log with the same ID later
 
 		created, replayed, err := svc.Create(r.Context(), n)
@@ -172,20 +178,26 @@ func CreateNotificationBatch(svc NotificationService, logger *slog.Logger) http.
 			ns[i].CorrelationID = corrID
 		}
 
-		batchID, created, err := svc.CreateBatch(r.Context(), ns)
+		batch, replayed, err := svc.CreateBatch(r.Context(), ns, idempotencyKey(r))
 		if err != nil {
 			writeServiceError(w, r, logger, err)
 			return
 		}
 
-		ids := make([]uuid.UUID, len(created))
-		for i, n := range created {
+		ids := make([]uuid.UUID, len(batch.Notifications))
+		for i, n := range batch.Notifications {
 			ids[i] = n.ID
 		}
-		// One line for the batch, not one per notification.
-		logger.InfoContext(r.Context(), "batch created", "batch_id", batchID, "count", len(created))
 
-		w.Header().Set("Location", "/api/v1/batches/"+batchID.String())
-		writeJSON(w, http.StatusAccepted, batchCreatedResponse{BatchID: batchID, Count: len(created), IDs: ids})
+		// One line for the batch, not one per notification.
+		msg := "batch created"
+		if replayed {
+			msg = "idempotent batch replayed"
+			w.Header().Set(headerIdempotentReplayed, "true")
+		}
+		logger.InfoContext(r.Context(), msg, "batch_id", batch.ID, "count", len(ids))
+
+		w.Header().Set("Location", "/api/v1/batches/"+batch.ID.String())
+		writeJSON(w, http.StatusAccepted, batchCreatedResponse{BatchID: batch.ID, Count: len(ids), IDs: ids})
 	}
 }

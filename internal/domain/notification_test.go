@@ -169,19 +169,23 @@ func TestValidateBatch(t *testing.T) {
 	tests := []struct {
 		name       string
 		batch      []Notification
+		key        *string
 		wantFields []string // nil means valid
 	}{
-		{"one valid", []Notification{valid}, nil},
-		{"max size", slices.Repeat([]Notification{valid}, MaxBatchSize), nil},
-		{"empty", nil, []string{"notifications"}},
-		{"too many", slices.Repeat([]Notification{valid}, MaxBatchSize+1), []string{"notifications"}},
-		{"invalid items are named by position", []Notification{valid, noRecipient, valid, noContent},
+		{"one valid", []Notification{valid}, nil, nil},
+		{"max size", slices.Repeat([]Notification{valid}, MaxBatchSize), nil, nil},
+		{"empty", nil, nil, []string{"notifications"}},
+		{"too many", slices.Repeat([]Notification{valid}, MaxBatchSize+1), nil, []string{"notifications"}},
+		{"invalid items are named by position", []Notification{valid, noRecipient, valid, noContent}, nil,
 			[]string{"notifications[1].recipient", "notifications[3].content"}},
+		{"valid key", []Notification{valid}, ptr("campaign-7"), nil},
+		{"invalid key is reported with the items", []Notification{noRecipient}, ptr("has space"),
+			[]string{"notifications[0].recipient", "Idempotency-Key"}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateBatch(tt.batch)
+			err := ValidateBatch(tt.batch, tt.key)
 			if tt.wantFields == nil {
 				if err != nil {
 					t.Fatalf("ValidateBatch = %v, want nil", err)

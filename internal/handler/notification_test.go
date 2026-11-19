@@ -25,6 +25,7 @@ type fakeNotificationService struct {
 	calls    int
 	got      domain.Notification
 	gotBatch []domain.Notification
+	gotKey   *string // batch idempotency key
 }
 
 var (
@@ -46,18 +47,20 @@ func (f *fakeNotificationService) Create(_ context.Context, n domain.Notificatio
 var fakeBatchID = uuid.MustParse("3f2c9a1e-7b4d-4c1a-9e8f-1a2b3c4d5e6f")
 
 // CreateBatch gives every notification a new ID under fakeBatchID.
-func (f *fakeNotificationService) CreateBatch(_ context.Context, ns []domain.Notification) (uuid.UUID, []domain.Notification, error) {
+func (f *fakeNotificationService) CreateBatch(
+	_ context.Context, ns []domain.Notification, key *string,
+) (domain.Batch, bool, error) {
 	f.calls++
-	f.gotBatch = ns
+	f.gotBatch, f.gotKey = ns, key
 	if f.err != nil {
-		return uuid.Nil, nil, f.err
+		return domain.Batch{}, false, f.err
 	}
 	created := make([]domain.Notification, len(ns))
 	for i, n := range ns {
 		n.ID, n.BatchID, n.Status = uuid.New(), &fakeBatchID, domain.StatusPending
 		created[i] = n
 	}
-	return fakeBatchID, created, nil
+	return domain.Batch{ID: fakeBatchID, Notifications: created}, f.replayed, nil
 }
 
 // Get knows only fakeID, as a sent notification.
@@ -385,6 +388,8 @@ func TestCreateNotificationBatch_Errors(t *testing.T) {
 		{"bare array instead of an object", `[{}]`, nil, http.StatusBadRequest, codeInvalidBody},
 		{"larger than the batch limit", `{"notifications":[{"content":"` + strings.Repeat("a", maxBatchBodyBytes) + `"}]}`,
 			nil, http.StatusRequestEntityTooLarge, codeBodyTooLarge},
+		{"idempotency key reused", `{"notifications":[{}]}`, domain.ErrIdempotencyKeyReused,
+			http.StatusUnprocessableEntity, codeKeyReused},
 		{"service failure is hidden", `{"notifications":[{}]}`, errors.New("boom"), http.StatusInternalServerError, codeInternal},
 	}
 	for _, tt := range tests {
@@ -411,5 +416,29 @@ func TestCreateNotificationBatch_AllowsBodiesOverOneMB(t *testing.T) {
 	svc := &fakeNotificationService{}
 	if rec := postBatch(t, svc, body); rec.Code != http.StatusAccepted || len(svc.gotBatch) != 300 {
 		t.Errorf("status %d with %d items, want 202 with 300", rec.Code, len(svc.gotBatch))
+	}
+}
+
+func TestCreateNotificationBatch_IdempotencyKey(t *testing.T) {
+	const body = `{"notifications":[{"channel":"sms","recipient":"+905551234567","content":"hi"}]}`
+
+	svc := &fakeNotificationService{}
+	rec := postBatch(t, svc, body)
+	if svc.gotKey != nil || rec.Header().Get(headerIdempotentReplayed) != "" {
+		t.Errorf("without header: key %v, replayed header %q; want neither", svc.gotKey, rec.Header().Get(headerIdempotentReplayed))
+	}
+
+	svc = &fakeNotificationService{replayed: true}
+	rec = postBatch(t, svc, body, "Idempotency-Key", "campaign-7")
+	if svc.gotKey == nil || *svc.gotKey != "campaign-7" {
+		t.Errorf("service got key %v, want campaign-7", svc.gotKey)
+	}
+	if rec.Code != http.StatusAccepted || rec.Header().Get(headerIdempotentReplayed) != "true" {
+		t.Errorf("replay: status %d, %s = %q; want 202 and true",
+			rec.Code, headerIdempotentReplayed, rec.Header().Get(headerIdempotentReplayed))
+	}
+	// Items themselves carry no key from the handler; the service derives item keys.
+	if svc.gotBatch[0].IdempotencyKey != nil {
+		t.Errorf("item key = %v, want nil", svc.gotBatch[0].IdempotencyKey)
 	}
 }

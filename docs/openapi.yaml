@@ -118,18 +118,7 @@ paths:
         "413":
           $ref: "#/components/responses/BodyTooLarge"
         "422":
-          description: The `Idempotency-Key` was already used for a different request (`idempotency_key_reused`).
-          headers:
-            X-Correlation-ID:
-              $ref: "#/components/headers/CorrelationID"
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error:
-                  code: idempotency_key_reused
-                  message: this Idempotency-Key was already used for a different request; use a new key for a new notification
+          $ref: "#/components/responses/IdempotencyKeyReused"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
@@ -146,7 +135,14 @@ paths:
         `400` lists every invalid item by position, e.g. `notifications[3].recipient`.
 
         Each item follows the same rules as a single create. The body may be up to 10 MB.
+
+        **Idempotency** works as for single creates, for the whole batch: repeating the same batch
+        with the same `Idempotency-Key` returns the original batch (`Idempotent-Replayed: true`)
+        and creates nothing; reusing the key for a different batch (other items or another count)
+        is `422`. Internally item `i` is stored with the key `<key>#<i>`, so don't use keys of
+        that form for single creates.
       parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/CorrelationID"
       requestBody:
         required: true
@@ -165,13 +161,18 @@ paths:
                   content: Sale starts now!
       responses:
         "202":
-          description: Accepted and queued. `ids[i]` is the notification created from `notifications[i]`.
+          description: Accepted and queued, or replayed for a repeated idempotency key. `ids[i]` is the notification created from `notifications[i]`.
           headers:
             Location:
               description: URL of the batch status.
               schema:
                 type: string
                 example: /api/v1/batches/3f2c9a1e-7b4d-4c1a-9e8f-1a2b3c4d5e6f
+            Idempotent-Replayed:
+              description: "`true` when this is the stored result of an earlier batch with the same key. Absent otherwise."
+              schema:
+                type: string
+                enum: ["true"]
             X-Correlation-ID:
               $ref: "#/components/headers/CorrelationID"
           content:
@@ -198,6 +199,8 @@ paths:
                       message: must be a phone number in E.164 format, e.g. +905551234567
         "413":
           $ref: "#/components/responses/BodyTooLarge"
+        "422":
+          $ref: "#/components/responses/IdempotencyKeyReused"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
         "500":
@@ -328,6 +331,19 @@ components:
         example: 2ff4f8b7-e533-404b-acce-cd5ea1fa298b
 
   responses:
+    IdempotencyKeyReused:
+      description: The `Idempotency-Key` was already used for a different request (`idempotency_key_reused`).
+      headers:
+        X-Correlation-ID:
+          $ref: "#/components/headers/CorrelationID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: idempotency_key_reused
+              message: this Idempotency-Key was already used for a different request; use a new key for a new notification
     BodyTooLarge:
       description: The request body is larger than 1 MB (`body_too_large`).
       headers:

@@ -254,6 +254,13 @@ Instead the `UNIQUE` index decides in one step: `INSERT ... ON CONFLICT (idempot
 RETURNING ...`. A returned row means this request won; no row means the key is taken, so the service
 reads the stored row (in a separate statement, so it sees the winner's committed row) and replays it.
 
+**Batches** (added in Phase 5) use the same header for the whole batch. Item `i` is stored with the
+key `<key>#<i>`, so the existing unique index and `ON CONFLICT` cover batches without a schema
+change. The insert runs in a transaction: if any item key is taken, everything is rolled back, so a
+reused key can never leave a half-saved batch. A repeat counts as the same batch only if it has the
+same number of items, each the same request; the lookup also checks one key past the end, so a
+shorter request can't replay part of a longer batch.
+
 What we give up: keys can't be reused after a period of time; there are no per-client key scopes
 (the system has no client accounts). Duplicates between worker and provider are a separate problem,
 handled in Phase 8.
