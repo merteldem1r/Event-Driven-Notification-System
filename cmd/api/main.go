@@ -22,11 +22,9 @@ func main() {
 	}
 }
 
-// run holds the real startup logic. Returning an error (instead of calling
-// os.Exit deep inside) keeps deferred cleanup working and main trivial.
+// run starts the API and blocks until it shuts down.
 func run() error {
-	// Local development: pick up personal settings from .env.local if it exists.
-	// No-op in Docker and production, where the file isn't present.
+	// Local development only; ignored when the file is missing.
 	if err := config.LoadDotEnv(".env.local"); err != nil {
 		return err
 	}
@@ -36,42 +34,38 @@ func run() error {
 		return err
 	}
 
-	// Structured JSON logs: one JSON object per line, easy for tools to search.
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
 	slog.SetDefault(logger)
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.HTTPPort),
 		Handler: handler.NewRouter(logger),
-		// Timeouts protect the server from slow or stuck clients
-		// holding connections open forever.
+		// Protect against slow or stuck clients.
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
 
-	// ctx is cancelled when the process gets Ctrl+C (SIGINT)
-	// or `docker stop` (SIGTERM).
+	// Cancelled on Ctrl+C (SIGINT) or docker stop (SIGTERM).
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// ListenAndServe blocks, so it runs in its own goroutine while
-	// this one waits for either a server error or a shutdown signal.
+	// Buffered so the goroutine can exit even after nobody is reading.
 	serverErr := make(chan error, 1)
 	go func() {
 		slog.Info("api starting", "addr", srv.Addr)
 		serverErr <- srv.ListenAndServe()
 	}()
 
+	// Wait for a server error or a stop signal.
 	select {
 	case err := <-serverErr:
 		return fmt.Errorf("http server: %w", err)
 	case <-ctx.Done():
 	}
 
-	// Graceful shutdown: stop accepting new requests, let in-flight
-	// requests finish, but give up after 10 seconds.
+	// Stop accepting requests and let in-flight ones finish (max 10s).
 	slog.Info("shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

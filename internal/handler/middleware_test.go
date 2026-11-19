@@ -9,8 +9,7 @@ import (
 	"testing"
 )
 
-// newBufferLogger returns a JSON logger that writes into buf,
-// so a test can read back exactly what was logged.
+// newBufferLogger returns a JSON logger that writes into buf.
 func newBufferLogger(buf *bytes.Buffer) *slog.Logger {
 	return slog.New(slog.NewJSONHandler(buf, nil))
 }
@@ -55,8 +54,7 @@ func TestRequestLogger_LogsEveryRequest(t *testing.T) {
 			if line["path"] != tt.path {
 				t.Errorf("path = %v, want %s", line["path"], tt.path)
 			}
-			// JSON numbers decode into float64.
-			if line["status"] != float64(tt.wantStatus) {
+			if line["status"] != float64(tt.wantStatus) { // JSON numbers decode as float64
 				t.Errorf("status = %v, want %d", line["status"], tt.wantStatus)
 			}
 			if _, ok := line["duration_ms"]; !ok {

@@ -2,22 +2,33 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"strconv"
+
+	"github.com/joho/godotenv"
 )
 
-// Config holds the settings the service needs.
-// New fields get added as later phases need them (database URL, Redis URL, ...).
+// Config holds the service settings.
 type Config struct {
 	HTTPPort int
 	LogLevel slog.Level
 }
 
-// Load reads settings from the environment and falls back to defaults.
-// It returns an error for values that are present but invalid, so a typo
-// fails loudly at startup instead of being silently ignored.
+// LoadDotEnv loads variables from a local env file if it exists.
+// Variables that are already set are not overwritten.
+func LoadDotEnv(path string) error {
+	err := godotenv.Load(path)
+	if err == nil || errors.Is(err, fs.ErrNotExist) {
+		return nil // no file in Docker and production
+	}
+	return fmt.Errorf("load %s: %w", path, err)
+}
+
+// Load reads settings from the environment, using defaults for unset values.
 func Load() (Config, error) {
 	port, err := strconv.Atoi(getEnv("HTTP_PORT", "8080"))
 	if err != nil {

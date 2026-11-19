@@ -12,7 +12,6 @@ func TestHealth(t *testing.T) {
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
 
-	// DiscardHandler drops all log output; this test only checks the response.
 	NewRouter(slog.New(slog.DiscardHandler)).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {

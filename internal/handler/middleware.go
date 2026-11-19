@@ -8,25 +8,18 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 )
 
-// RequestLogger returns a middleware that writes one log line per HTTP request,
-// after the request has finished: method, path, status code, response size
-// and how long it took. 5xx responses are logged at ERROR level, the rest at INFO.
+// RequestLogger logs one line per request: method, path, status, size and duration.
 func RequestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
+			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor) // captures status and size
 
-			// A plain ResponseWriter doesn't let us read back what was written.
-			// The wrapper records the status code and byte count as the
-			// handler writes them, so we can log them afterwards.
-			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
-
-			next.ServeHTTP(ww, r) // run the rest of the chain (other middleware + handler)
+			next.ServeHTTP(ww, r)
 
 			status := ww.Status()
 			if status == 0 {
-				// The handler wrote nothing; net/http sends 200 in that case.
-				status = http.StatusOK
+				status = http.StatusOK // nothing written: net/http sends 200
 			}
 
 			level := slog.LevelInfo

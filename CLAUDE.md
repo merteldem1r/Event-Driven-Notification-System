@@ -91,7 +91,8 @@ New packages follow the same idea: one clear responsibility per package, named a
   JSON bodies; asynchronous creates return `202 Accepted`; one consistent error format.
 - **Tests:** table-driven where it fits; `httptest` for handlers; real PostgreSQL/Redis via
   testcontainers for data-access code; the whole suite runs with `make test`.
-- **Comments** explain *why*, not *what*. Every package has a doc comment.
+- **Comments** are short and simple: one line where possible, explain *why* only when it isn't obvious. Every package and exported identifier has a brief doc comment.
+- **Files:** split a package into files only when a file gets large or holds a clearly separate concern; `x_test.go` tests `x.go`.
 - **Docs:** plain language, no emojis.
 
 ## How we work
