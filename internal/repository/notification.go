@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -155,6 +156,46 @@ func (r *Notifications) GetByIdempotencyKey(ctx context.Context, key string) (do
 		return domain.Notification{}, fmt.Errorf("get notification by idempotency key: %w", err)
 	}
 	return n, nil
+}
+
+// BatchSummary counts the notifications of a batch per status, or returns domain.ErrNotFound.
+func (r *Notifications) BatchSummary(ctx context.Context, batchID uuid.UUID) (domain.BatchSummary, error) {
+	// One row per status present; served by the batch_id index.
+	rows, err := r.db.Query(ctx, `
+		SELECT status, count(*), min(created_at)
+		FROM notifications WHERE batch_id = $1
+		GROUP BY status`, batchID)
+	if err != nil {
+		return domain.BatchSummary{}, fmt.Errorf("batch summary %s: %w", batchID, err)
+	}
+	defer rows.Close()
+
+	summary := domain.BatchSummary{ID: batchID, Counts: make(map[domain.Status]int, len(domain.Statuses))}
+	for _, s := range domain.Statuses {
+		summary.Counts[s] = 0
+	}
+	for rows.Next() {
+		var (
+			status  domain.Status
+			count   int
+			created time.Time
+		)
+		if err := rows.Scan(&status, &count, &created); err != nil {
+			return domain.BatchSummary{}, fmt.Errorf("scan batch summary: %w", err)
+		}
+		summary.Counts[status] = count
+		summary.Total += count
+		if summary.CreatedAt.IsZero() || created.Before(summary.CreatedAt) {
+			summary.CreatedAt = created
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return domain.BatchSummary{}, fmt.Errorf("batch summary %s: %w", batchID, err)
+	}
+	if summary.Total == 0 { // no rows: no such batch
+		return domain.BatchSummary{}, fmt.Errorf("batch summary %s: %w", batchID, domain.ErrNotFound)
+	}
+	return summary, nil
 }
 
 // GetByIdempotencyKeys returns the notifications stored under keys, in the order of keys.

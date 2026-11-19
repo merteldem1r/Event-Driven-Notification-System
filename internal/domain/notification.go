@@ -72,6 +72,9 @@ const (
 	StatusCancelled  Status = "cancelled"
 )
 
+// Statuses lists every status, in lifecycle order.
+var Statuses = []Status{StatusPending, StatusProcessing, StatusSent, StatusFailed, StatusCancelled}
+
 // Notification is one message to one recipient.
 // Pointer fields are optional; nil is stored as NULL.
 type Notification struct {
@@ -93,6 +96,14 @@ type Notification struct {
 
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+// BatchSummary counts a batch's notifications per status.
+type BatchSummary struct {
+	ID        uuid.UUID
+	Total     int
+	Counts    map[Status]int // every status is present, 0 if none
+	CreatedAt time.Time
 }
 
 // Batch is a group of notifications created by one request.

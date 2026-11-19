@@ -63,6 +63,21 @@ func (f *fakeNotificationService) CreateBatch(
 	return domain.Batch{ID: fakeBatchID, Notifications: created}, f.replayed, nil
 }
 
+// GetBatch knows only fakeBatchID: 10 notifications, 3 still pending.
+func (f *fakeNotificationService) GetBatch(_ context.Context, id uuid.UUID) (domain.BatchSummary, error) {
+	f.calls++
+	if f.err != nil {
+		return domain.BatchSummary{}, f.err
+	}
+	if id != fakeBatchID {
+		return domain.BatchSummary{}, fmt.Errorf("batch summary %s: %w", id, domain.ErrNotFound)
+	}
+	return domain.BatchSummary{
+		ID: fakeBatchID, Total: 10, CreatedAt: fakeCreatedAt,
+		Counts: map[domain.Status]int{domain.StatusPending: 3, domain.StatusSent: 6, domain.StatusFailed: 1},
+	}, nil
+}
+
 // Get knows only fakeID, as a sent notification.
 func (f *fakeNotificationService) Get(_ context.Context, id uuid.UUID) (domain.Notification, error) {
 	f.calls++
@@ -440,5 +455,49 @@ func TestCreateNotificationBatch_IdempotencyKey(t *testing.T) {
 	// Items themselves carry no key from the handler; the service derives item keys.
 	if svc.gotBatch[0].IdempotencyKey != nil {
 		t.Errorf("item key = %v, want nil", svc.gotBatch[0].IdempotencyKey)
+	}
+}
+
+func getBatch(t *testing.T, svc NotificationService, id string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/batches/"+id, nil)
+	rec := httptest.NewRecorder()
+	NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, svc).ServeHTTP(rec, req)
+	return rec
+}
+
+func TestGetBatch_Found(t *testing.T) {
+	rec := getBatch(t, &fakeNotificationService{}, fakeBatchID.String())
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body)
+	}
+	// Statuses with no notifications are still listed, as 0.
+	want := `{"batch_id":"` + fakeBatchID.String() + `","total":10,` +
+		`"counts":{"pending":3,"processing":0,"sent":6,"failed":1,"cancelled":0},` +
+		`"created_at":"2026-11-20T10:00:00Z"}`
+	if got := strings.TrimSpace(rec.Body.String()); got != want {
+		t.Errorf("body =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestGetBatch_Errors(t *testing.T) {
+	tests := []struct {
+		name       string
+		id         string
+		wantStatus int
+		wantCode   string
+	}{
+		{"unknown batch", uuid.NewString(), http.StatusNotFound, codeNotFound},
+		{"malformed id", "not-a-uuid", http.StatusBadRequest, codeInvalidID},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := getBatch(t, &fakeNotificationService{}, tt.id)
+			var got errorResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || rec.Code != tt.wantStatus || got.Error.Code != tt.wantCode {
+				t.Errorf("got %d %s, want %d %q", rec.Code, rec.Body, tt.wantStatus, tt.wantCode)
+			}
+		})
 	}
 }

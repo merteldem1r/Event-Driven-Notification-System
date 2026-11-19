@@ -18,6 +18,7 @@ type NotificationStore interface {
 	GetByID(ctx context.Context, id uuid.UUID) (domain.Notification, error)
 	GetByIdempotencyKey(ctx context.Context, key string) (domain.Notification, error)
 	GetByIdempotencyKeys(ctx context.Context, keys []string) ([]domain.Notification, error)
+	BatchSummary(ctx context.Context, batchID uuid.UUID) (domain.BatchSummary, error)
 }
 
 // Notifications implements the notification use cases.
@@ -133,4 +134,10 @@ func (s *Notifications) replay(ctx context.Context, n domain.Notification) (doma
 // Get returns the notification with the given ID, or an error wrapping domain.ErrNotFound.
 func (s *Notifications) Get(ctx context.Context, id uuid.UUID) (domain.Notification, error) {
 	return s.store.GetByID(ctx, id) // the repository already wraps the error with the ID
+}
+
+// GetBatch returns how many of a batch's notifications are in each status,
+// or an error wrapping domain.ErrNotFound.
+func (s *Notifications) GetBatch(ctx context.Context, batchID uuid.UUID) (domain.BatchSummary, error) {
+	return s.store.BatchSummary(ctx, batchID) // the repository already wraps the error with the ID
 }

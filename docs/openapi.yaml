@@ -260,6 +260,62 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /api/v1/batches/{id}:
+    get:
+      tags: [notifications]
+      operationId: getBatch
+      summary: Get a batch's progress
+      description: How many of the batch's notifications are in each status. Every status is listed, with 0 if none.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The `batch_id` from the batch create response.
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/CorrelationID"
+      responses:
+        "200":
+          description: The batch's counts per status.
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchStatus"
+        "400":
+          description: The ID is not a UUID (`invalid_id`).
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: invalid_id
+                  message: id must be a UUID
+        "404":
+          description: No batch has this ID (`not_found`).
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: not_found
+                  message: the requested item was not found
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /health:
     get:
       tags: [operations]
@@ -463,6 +519,38 @@ components:
         ids:
           - 7c9e6679-7425-40de-944b-e07fc1f90ae7
           - 2ff4f8b7-e533-404b-acce-cd5ea1fa298b
+
+    BatchStatus:
+      type: object
+      required: [batch_id, total, counts, created_at]
+      properties:
+        batch_id:
+          type: string
+          format: uuid
+        total:
+          type: integer
+          minimum: 1
+          description: Number of notifications in the batch.
+        counts:
+          type: object
+          description: Notifications per status; they add up to `total`.
+          required: [pending, processing, sent, failed, cancelled]
+          additionalProperties: false
+          properties:
+            pending: {type: integer, minimum: 0}
+            processing: {type: integer, minimum: 0}
+            sent: {type: integer, minimum: 0}
+            failed: {type: integer, minimum: 0}
+            cancelled: {type: integer, minimum: 0}
+        created_at:
+          type: string
+          format: date-time
+          description: When the batch was created, in UTC.
+      example:
+        batch_id: 3f2c9a1e-7b4d-4c1a-9e8f-1a2b3c4d5e6f
+        total: 1000
+        counts: {pending: 412, processing: 8, sent: 571, failed: 9, cancelled: 0}
+        created_at: "2026-11-20T10:00:00Z"
 
     Notification:
       type: object

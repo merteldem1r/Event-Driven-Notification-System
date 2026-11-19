@@ -18,6 +18,7 @@ type NotificationService interface {
 	Create(ctx context.Context, n domain.Notification) (_ domain.Notification, replayed bool, _ error)
 	CreateBatch(ctx context.Context, ns []domain.Notification, idempotencyKey *string) (_ domain.Batch, replayed bool, _ error)
 	Get(ctx context.Context, id uuid.UUID) (domain.Notification, error)
+	GetBatch(ctx context.Context, batchID uuid.UUID) (domain.BatchSummary, error)
 }
 
 // Idempotency headers (D12), as in the IETF draft and common APIs.
@@ -56,6 +57,34 @@ type batchCreatedResponse struct {
 	BatchID uuid.UUID   `json:"batch_id"`
 	Count   int         `json:"count"`
 	IDs     []uuid.UUID `json:"ids"` // ids[i] belongs to the request's notifications[i]
+}
+
+// batchStatusResponse is how a batch's progress looks in the API.
+type batchStatusResponse struct {
+	BatchID   uuid.UUID    `json:"batch_id"`
+	Total     int          `json:"total"`
+	Counts    statusCounts `json:"counts"`
+	CreatedAt time.Time    `json:"created_at"`
+}
+
+// statusCounts has a field per status, so every count is always present.
+type statusCounts struct {
+	Pending    int `json:"pending"`
+	Processing int `json:"processing"`
+	Sent       int `json:"sent"`
+	Failed     int `json:"failed"`
+	Cancelled  int `json:"cancelled"`
+}
+
+// idParam parses the {id} path parameter. A malformed ID is a client mistake (400),
+// not a missing item (404). On failure it writes the error response and returns false.
+func idParam(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, codeInvalidID, "id must be a UUID")
+		return uuid.Nil, false
+	}
+	return id, true
 }
 
 // idempotencyKey returns the request's Idempotency-Key, or nil if the header is missing.
@@ -146,10 +175,8 @@ func CreateNotification(svc NotificationService, logger *slog.Logger) http.Handl
 // GetNotification handles GET /api/v1/notifications/{id}: it returns one notification and its status.
 func GetNotification(svc NotificationService, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// A malformed ID is a client mistake (400), not a missing notification (404).
-		id, err := uuid.Parse(chi.URLParam(r, "id"))
-		if err != nil {
-			writeError(w, http.StatusBadRequest, codeInvalidID, "id must be a UUID")
+		id, ok := idParam(w, r)
+		if !ok {
 			return
 		}
 
@@ -199,5 +226,35 @@ func CreateNotificationBatch(svc NotificationService, logger *slog.Logger) http.
 
 		w.Header().Set("Location", "/api/v1/batches/"+batch.ID.String())
 		writeJSON(w, http.StatusAccepted, batchCreatedResponse{BatchID: batch.ID, Count: len(ids), IDs: ids})
+	}
+}
+
+// GetBatch handles GET /api/v1/batches/{id}: how many of the batch's notifications are in each status.
+func GetBatch(svc NotificationService, logger *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := idParam(w, r)
+		if !ok {
+			return
+		}
+
+		summary, err := svc.GetBatch(r.Context(), id)
+		if err != nil {
+			writeServiceError(w, r, logger, err)
+			return
+		}
+
+		c := summary.Counts
+		writeJSON(w, http.StatusOK, batchStatusResponse{
+			BatchID: summary.ID,
+			Total:   summary.Total,
+			Counts: statusCounts{
+				Pending:    c[domain.StatusPending],
+				Processing: c[domain.StatusProcessing],
+				Sent:       c[domain.StatusSent],
+				Failed:     c[domain.StatusFailed],
+				Cancelled:  c[domain.StatusCancelled],
+			},
+			CreatedAt: summary.CreatedAt.UTC(),
+		})
 	}
 }

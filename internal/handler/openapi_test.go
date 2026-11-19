@@ -105,6 +105,9 @@ func TestOpenAPI_ResponsesMatchSpec(t *testing.T) {
 		{"get: found", http.MethodGet, "/api/v1/notifications/" + fakeID.String(), "", &fakeNotificationService{}, nil},
 		{"get: not found", http.MethodGet, "/api/v1/notifications/" + uuid.NewString(), "", &fakeNotificationService{}, nil},
 		{"get: invalid id", http.MethodGet, "/api/v1/notifications/abc", "", &fakeNotificationService{}, nil},
+		{"batch status: found", http.MethodGet, "/api/v1/batches/" + fakeBatchID.String(), "", &fakeNotificationService{}, nil},
+		{"batch status: not found", http.MethodGet, "/api/v1/batches/" + uuid.NewString(), "", &fakeNotificationService{}, nil},
+		{"batch status: invalid id", http.MethodGet, "/api/v1/batches/abc", "", &fakeNotificationService{}, nil},
 		{"health: ok", http.MethodGet, "/health", "", &fakeNotificationService{}, nil},
 	}
 

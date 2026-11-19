@@ -408,3 +408,41 @@ func TestCreateBatch_ConcurrentSameKey(t *testing.T) {
 		t.Errorf("rows with the key = %d, want %d", n, size)
 	}
 }
+
+func TestBatchSummary(t *testing.T) {
+	repo := NewNotifications(testDB)
+	batchID := uuid.New()
+	created, err := repo.CreateBatch(t.Context(), batchOf(4, batchID))
+	if err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+	// The worker doesn't exist yet, so move two rows on by hand.
+	if _, err := testDB.Exec(t.Context(), `UPDATE notifications SET status = 'sent' WHERE id = $1`, created[0].ID); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if _, err := testDB.Exec(t.Context(), `UPDATE notifications SET status = 'failed' WHERE id = $1`, created[1].ID); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	got, err := repo.BatchSummary(t.Context(), batchID)
+	if err != nil {
+		t.Fatalf("BatchSummary: %v", err)
+	}
+	want := map[domain.Status]int{
+		domain.StatusPending: 2, domain.StatusProcessing: 0, domain.StatusSent: 1,
+		domain.StatusFailed: 1, domain.StatusCancelled: 0,
+	}
+	if got.ID != batchID || got.Total != 4 || !reflect.DeepEqual(got.Counts, want) {
+		t.Errorf("summary = %+v, want batch %s, total 4, counts %v", got, batchID, want)
+	}
+	if !got.CreatedAt.Equal(created[0].CreatedAt) {
+		t.Errorf("CreatedAt = %v, want %v", got.CreatedAt, created[0].CreatedAt)
+	}
+}
+
+func TestBatchSummaryNotFound(t *testing.T) {
+	_, err := NewNotifications(testDB).BatchSummary(t.Context(), uuid.New())
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("err = %v, want domain.ErrNotFound", err)
+	}
+}

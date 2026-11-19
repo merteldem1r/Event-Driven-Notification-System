@@ -79,6 +79,20 @@ func (f *fakeStore) GetByIdempotencyKeys(ctx context.Context, keys []string) ([]
 	return found, nil
 }
 
+func (f *fakeStore) BatchSummary(_ context.Context, batchID uuid.UUID) (domain.BatchSummary, error) {
+	summary := domain.BatchSummary{ID: batchID, Counts: map[domain.Status]int{}}
+	for _, n := range f.saved {
+		if n.BatchID != nil && *n.BatchID == batchID {
+			summary.Counts[n.Status]++
+			summary.Total++
+		}
+	}
+	if summary.Total == 0 {
+		return domain.BatchSummary{}, domain.ErrNotFound
+	}
+	return summary, nil
+}
+
 func validNotification() domain.Notification {
 	return domain.Notification{
 		Channel: domain.ChannelSMS, Recipient: "+905551234567", Content: "hello", Priority: domain.PriorityNormal,
@@ -290,5 +304,21 @@ func TestCreateBatch_IdempotencyKeyReused(t *testing.T) {
 				t.Errorf("err = %v, want domain.ErrIdempotencyKeyReused", err)
 			}
 		})
+	}
+}
+
+func TestGetBatch(t *testing.T) {
+	svc := NewNotifications(&fakeStore{})
+	batch, _, err := svc.CreateBatch(t.Context(), threeItems(), nil)
+	if err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+
+	got, err := svc.GetBatch(t.Context(), batch.ID)
+	if err != nil || got.Total != 3 || got.Counts[domain.StatusPending] != 3 {
+		t.Errorf("GetBatch = %+v, %v; want 3 pending", got, err)
+	}
+	if _, err := svc.GetBatch(t.Context(), uuid.New()); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("GetBatch(unknown) err = %v, want domain.ErrNotFound", err)
 	}
 }
