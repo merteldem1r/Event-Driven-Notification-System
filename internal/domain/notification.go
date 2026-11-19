@@ -103,6 +103,8 @@ const (
 	MaxPushTokenLength = 512
 
 	MaxIdempotencyKeyLength = 255 // D12
+
+	MaxBatchSize = 1000 // notifications per batch request
 )
 
 // contentLimits is the maximum content length per channel.
@@ -174,6 +176,30 @@ func (n Notification) Validate() error {
 		return &ValidationError{Fields: errs}
 	}
 	return nil // a plain nil, not a nil *ValidationError, so err == nil works for callers
+}
+
+// ValidateBatch checks every notification of a batch. One invalid item makes the whole batch
+// invalid (D5). Field names say which item, e.g. "notifications[3].recipient".
+func ValidateBatch(ns []Notification) error {
+	if len(ns) == 0 || len(ns) > MaxBatchSize {
+		return &ValidationError{Fields: []FieldError{{
+			Field: "notifications", Message: fmt.Sprintf("must contain 1 to %d notifications", MaxBatchSize),
+		}}}
+	}
+
+	var errs []FieldError
+	for i, n := range ns {
+		var ve *ValidationError
+		if errors.As(n.Validate(), &ve) {
+			for _, f := range ve.Fields {
+				errs = append(errs, FieldError{Field: fmt.Sprintf("notifications[%d].%s", i, f.Field), Message: f.Message})
+			}
+		}
+	}
+	if len(errs) > 0 {
+		return &ValidationError{Fields: errs}
+	}
+	return nil
 }
 
 // checkRecipient returns a message if the recipient doesn't fit the channel, or "" if it does.

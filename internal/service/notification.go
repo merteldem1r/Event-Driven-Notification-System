@@ -14,6 +14,7 @@ import (
 // NotificationStore saves and loads notifications.
 type NotificationStore interface {
 	Create(ctx context.Context, n domain.Notification) (domain.Notification, error)
+	CreateBatch(ctx context.Context, ns []domain.Notification) ([]domain.Notification, error)
 	GetByID(ctx context.Context, id uuid.UUID) (domain.Notification, error)
 	GetByIdempotencyKey(ctx context.Context, key string) (domain.Notification, error)
 }
@@ -46,6 +47,27 @@ func (s *Notifications) Create(ctx context.Context, n domain.Notification) (_ do
 		return domain.Notification{}, false, fmt.Errorf("create notification: %w", err)
 	}
 	return created, false, nil
+}
+
+// CreateBatch validates every notification and saves them together under a new batch ID.
+// If any is invalid, nothing is saved (D5). The result is in the same order as ns.
+func (s *Notifications) CreateBatch(ctx context.Context, ns []domain.Notification) (uuid.UUID, []domain.Notification, error) {
+	if err := domain.ValidateBatch(ns); err != nil {
+		return uuid.Nil, nil, err
+	}
+
+	batchID := uuid.New()
+	items := make([]domain.Notification, len(ns)) // a copy, so the caller's slice isn't changed
+	for i, n := range ns {
+		n.BatchID = &batchID
+		items[i] = n
+	}
+
+	created, err := s.store.CreateBatch(ctx, items)
+	if err != nil {
+		return uuid.Nil, nil, fmt.Errorf("create batch: %w", err)
+	}
+	return batchID, created, nil
 }
 
 // replay returns the notification already stored under n's idempotency key,

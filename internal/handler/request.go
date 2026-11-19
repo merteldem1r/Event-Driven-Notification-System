@@ -9,13 +9,16 @@ import (
 	"strings"
 )
 
-// maxBodyBytes caps request bodies; the largest valid notification is well below it.
-const maxBodyBytes = 1 << 20 // 1 MB
+// Body size caps; the largest valid request of each kind is well below them.
+const (
+	maxBodyBytes      = 1 << 20  // 1 MB: one notification
+	maxBatchBodyBytes = 10 << 20 // 10 MB: up to 1000 notifications
+)
 
-// decodeJSON reads exactly one JSON object from the body into dst, rejecting unknown fields.
-// On failure it writes the error response and returns false.
-func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+// decodeJSON reads exactly one JSON object of at most limit bytes from the body into dst,
+// rejecting unknown fields. On failure it writes the error response and returns false.
+func decodeJSON(w http.ResponseWriter, r *http.Request, dst any, limit int64) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 
@@ -23,7 +26,7 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
 			writeError(w, http.StatusRequestEntityTooLarge, codeBodyTooLarge,
-				fmt.Sprintf("request body must be at most %d bytes", maxBodyBytes))
+				fmt.Sprintf("request body must be at most %d bytes", limit))
 			return false
 		}
 		writeError(w, http.StatusBadRequest, codeInvalidBody, bodyErrorMessage(err))

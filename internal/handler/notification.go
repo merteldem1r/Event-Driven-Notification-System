@@ -16,6 +16,7 @@ import (
 // NotificationService is what the notification handlers need from the service layer.
 type NotificationService interface {
 	Create(ctx context.Context, n domain.Notification) (_ domain.Notification, replayed bool, _ error)
+	CreateBatch(ctx context.Context, ns []domain.Notification) (uuid.UUID, []domain.Notification, error)
 	Get(ctx context.Context, id uuid.UUID) (domain.Notification, error)
 }
 
@@ -30,6 +31,39 @@ type createNotificationRequest struct {
 	Recipient string `json:"recipient"`
 	Content   string `json:"content"`
 	Priority  string `json:"priority"` // optional: high, normal (default) or low
+}
+
+// toDomain maps the request to a notification, applying the priority default (D4).
+// An unknown priority name becomes 0, which validation rejects.
+func (req createNotificationRequest) toDomain() domain.Notification {
+	priority := domain.PriorityNormal
+	if req.Priority != "" {
+		priority = domain.ParsePriority(req.Priority)
+	}
+	return domain.Notification{
+		Channel:   domain.Channel(req.Channel),
+		Recipient: req.Recipient,
+		Content:   req.Content,
+		Priority:  priority,
+	}
+}
+
+type createBatchRequest struct {
+	Notifications []createNotificationRequest `json:"notifications"`
+}
+
+type batchCreatedResponse struct {
+	BatchID uuid.UUID   `json:"batch_id"`
+	Count   int         `json:"count"`
+	IDs     []uuid.UUID `json:"ids"` // ids[i] belongs to the request's notifications[i]
+}
+
+// correlationID returns the request's correlation ID for storing on notifications, or nil.
+func correlationID(r *http.Request) *string {
+	if id := logging.CorrelationID(r.Context()); id != "" {
+		return &id
+	}
+	return nil
 }
 
 // notificationResponse is how a notification looks in the API.
@@ -71,30 +105,16 @@ func toNotificationResponse(n domain.Notification) notificationResponse {
 func CreateNotification(svc NotificationService, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req createNotificationRequest
-		if !decodeJSON(w, r, &req) {
+		if !decodeJSON(w, r, &req, maxBodyBytes) {
 			return
 		}
 
-		// D4: priority is optional. An unknown name becomes 0, which validation rejects.
-		priority := domain.PriorityNormal
-		if req.Priority != "" {
-			priority = domain.ParsePriority(req.Priority)
-		}
-
-		n := domain.Notification{
-			Channel:   domain.Channel(req.Channel),
-			Recipient: req.Recipient,
-			Content:   req.Content,
-			Priority:  priority,
-		}
+		n := req.toDomain()
 		// Optional. Values (not Get) tells "header missing" apart from "header sent empty".
 		if keys := r.Header.Values(headerIdempotencyKey); len(keys) > 0 {
 			n.IdempotencyKey = &keys[0]
 		}
-		// Stored on the row so the worker can log with the same ID later.
-		if id := logging.CorrelationID(r.Context()); id != "" {
-			n.CorrelationID = &id
-		}
+		n.CorrelationID = correlationID(r) // stored so the worker can log with the same ID later
 
 		created, replayed, err := svc.Create(r.Context(), n)
 		if err != nil {
@@ -133,5 +153,39 @@ func GetNotification(svc NotificationService, logger *slog.Logger) http.HandlerF
 			return
 		}
 		writeJSON(w, http.StatusOK, toNotificationResponse(n))
+	}
+}
+
+// CreateNotificationBatch handles POST /api/v1/notifications/batch: up to 1000 notifications,
+// saved all together or not at all (D5).
+func CreateNotificationBatch(svc NotificationService, logger *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req createBatchRequest
+		if !decodeJSON(w, r, &req, maxBatchBodyBytes) {
+			return
+		}
+
+		corrID := correlationID(r)
+		ns := make([]domain.Notification, len(req.Notifications))
+		for i, item := range req.Notifications {
+			ns[i] = item.toDomain()
+			ns[i].CorrelationID = corrID
+		}
+
+		batchID, created, err := svc.CreateBatch(r.Context(), ns)
+		if err != nil {
+			writeServiceError(w, r, logger, err)
+			return
+		}
+
+		ids := make([]uuid.UUID, len(created))
+		for i, n := range created {
+			ids[i] = n.ID
+		}
+		// One line for the batch, not one per notification.
+		logger.InfoContext(r.Context(), "batch created", "batch_id", batchID, "count", len(created))
+
+		w.Header().Set("Location", "/api/v1/batches/"+batchID.String())
+		writeJSON(w, http.StatusAccepted, batchCreatedResponse{BatchID: batchID, Count: len(created), IDs: ids})
 	}
 }

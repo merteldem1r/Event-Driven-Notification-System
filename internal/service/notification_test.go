@@ -30,6 +30,19 @@ func (f *fakeStore) Create(_ context.Context, n domain.Notification) (domain.Not
 	return n, nil
 }
 
+func (f *fakeStore) CreateBatch(_ context.Context, ns []domain.Notification) ([]domain.Notification, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	created := make([]domain.Notification, len(ns))
+	for i, n := range ns {
+		n.ID, n.Status = uuid.New(), domain.StatusPending
+		f.saved = append(f.saved, n)
+		created[i] = n
+	}
+	return created, nil
+}
+
 func (f *fakeStore) GetByID(_ context.Context, id uuid.UUID) (domain.Notification, error) {
 	for _, n := range f.saved {
 		if n.ID == id {
@@ -165,5 +178,43 @@ func TestCreate_DifferentKeysAreDifferentNotifications(t *testing.T) {
 	}
 	if len(store.saved) != 2 {
 		t.Errorf("saved %d notifications, want 2", len(store.saved))
+	}
+}
+
+func TestCreateBatch_SavesAllUnderOneBatchID(t *testing.T) {
+	store := &fakeStore{}
+	in := []domain.Notification{validNotification(), validNotification(), validNotification()}
+
+	batchID, created, err := NewNotifications(store).CreateBatch(t.Context(), in)
+	if err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+	if batchID == uuid.Nil || len(created) != 3 || len(store.saved) != 3 {
+		t.Fatalf("batch %s, %d created, %d saved; want a batch ID and 3 of each", batchID, len(created), len(store.saved))
+	}
+	for i, n := range created {
+		if n.BatchID == nil || *n.BatchID != batchID {
+			t.Errorf("created[%d].BatchID = %v, want %s", i, n.BatchID, batchID)
+		}
+	}
+	if in[0].BatchID != nil {
+		t.Error("the caller's slice was modified")
+	}
+}
+
+// D5: one invalid item, nothing saved.
+func TestCreateBatch_AllOrNothing(t *testing.T) {
+	store := &fakeStore{}
+	bad := validNotification()
+	bad.Recipient = ""
+
+	_, _, err := NewNotifications(store).CreateBatch(t.Context(), []domain.Notification{validNotification(), bad})
+
+	var ve *domain.ValidationError
+	if !errors.As(err, &ve) || ve.Fields[0].Field != "notifications[1].recipient" {
+		t.Fatalf("err = %v, want a validation error for notifications[1].recipient", err)
+	}
+	if len(store.saved) != 0 {
+		t.Errorf("saved %d notifications, want 0", len(store.saved))
 	}
 }

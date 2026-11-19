@@ -15,7 +15,7 @@ Status values: **Done**, **Partial**, **Todo**.
 | ID | Requirement | Status | Phase | Notes |
 |---|---|---|---|---|
 | API-1 | Create a notification with recipient, channel, content and priority | Done | 4 | `POST /api/v1/notifications` → `202` with the stored notification; priority optional (default `normal`) |
-| API-2 | Batch creation, up to 1000 notifications per request | Todo | 5 | Shared batch ID; all-or-nothing vs partial is decision D5 |
+| API-2 | Batch creation, up to 1000 notifications per request | Done | 5 | `POST /api/v1/notifications/batch`; shared batch ID; all-or-nothing (D5); idempotency in 5.2 |
 | API-3 | Query notification status by ID | Done | 4 | `GET /api/v1/notifications/{id}`; 404 if unknown, 400 if the ID is not a UUID |
 | API-4 | Query status by batch ID | Todo | 5 | Summary counts per status |
 | API-5 | Cancel pending notifications | Todo | 5 | Atomic: only if still `pending`/`scheduled` |
@@ -88,10 +88,10 @@ Status values: **Done**, **Partial**, **Todo**.
 |---|---|---|---|---|
 | IMP-1 | The rate limit holds across **all** worker processes, not per worker | Todo | 7 | |
 | IMP-2 | Two workers never claim the same notification | Todo | 6 | |
-| IMP-3 | Saving and enqueuing are atomic (no dual-write problem) | Partial | 3, 5 | One table: inserting a row is enqueuing it (done); batch insert in one transaction in Phase 5 |
+| IMP-3 | Saving and enqueuing are atomic (no dual-write problem) | Done | 3, 5 | One table: inserting a row is enqueuing it; a batch is one statement, so all or none of it is saved |
 | IMP-4 | Cancel and worker claim can't both win (no race) | Todo | 5 | Conditional `UPDATE` |
 | IMP-5 | Graceful shutdown of API and workers (finish in-flight work on SIGTERM) | Partial | 2, 8 | API (done); worker pending |
 | IMP-6 | Low-priority messages are not starved forever | Todo | 6 | Depends on D7 |
 | IMP-7 | Config only via environment variables; invalid config fails at startup | Done | 2 | `internal/config` |
-| IMP-8 | Batch of 1000 is inserted efficiently (one transaction, bulk insert) | Todo | 5 | |
+| IMP-8 | Batch of 1000 is inserted efficiently (one transaction, bulk insert) | Done | 5 | One `INSERT ... SELECT FROM unnest(...)` statement; 1,000 rows in about 50 ms in tests |
 | IMP-9 | Burst test proves the 100/s cap holds under load | Todo | 15 | |

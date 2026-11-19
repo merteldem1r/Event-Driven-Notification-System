@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/domain"
@@ -51,6 +52,59 @@ func (r *Notifications) Create(ctx context.Context, n domain.Notification) (doma
 	}
 	if err != nil {
 		return domain.Notification{}, fmt.Errorf("insert notification: %w", err)
+	}
+	return created, nil
+}
+
+// CreateBatch inserts all notifications in one statement, so either all are saved or none.
+// It returns them as stored, in the same order as ns.
+func (r *Notifications) CreateBatch(ctx context.Context, ns []domain.Notification) ([]domain.Notification, error) {
+	// One array per column; unnest turns them back into rows inside the database.
+	// IDs are generated here so results can be put back in input order: RETURNING promises no order.
+	ids := make([]uuid.UUID, len(ns))
+	batchIDs := make([]pgtype.UUID, len(ns))
+	correlationIDs := make([]pgtype.Text, len(ns))
+	channels := make([]string, len(ns))
+	recipients := make([]string, len(ns))
+	contents := make([]string, len(ns))
+	priorities := make([]int16, len(ns))
+	for i, n := range ns {
+		ids[i] = uuid.New()
+		if n.BatchID != nil {
+			batchIDs[i] = pgtype.UUID{Bytes: *n.BatchID, Valid: true}
+		}
+		if n.CorrelationID != nil {
+			correlationIDs[i] = pgtype.Text{String: *n.CorrelationID, Valid: true}
+		}
+		channels[i], recipients[i], contents[i], priorities[i] = string(n.Channel), n.Recipient, n.Content, int16(n.Priority)
+	}
+
+	rows, err := r.db.Query(ctx, `
+		INSERT INTO notifications (id, batch_id, correlation_id, channel, recipient, content, priority)
+		SELECT * FROM unnest($1::uuid[], $2::uuid[], $3::text[], $4::text[], $5::text[], $6::text[], $7::smallint[])
+		RETURNING `+notificationColumns,
+		ids, batchIDs, correlationIDs, channels, recipients, contents, priorities,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("insert batch: %w", err)
+	}
+	defer rows.Close()
+
+	byID := make(map[uuid.UUID]domain.Notification, len(ns))
+	for rows.Next() {
+		n, err := scanNotification(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan batch row: %w", err)
+		}
+		byID[n.ID] = n
+	}
+	if err := rows.Err(); err != nil { // e.g. a constraint failed: the whole statement is rolled back
+		return nil, fmt.Errorf("insert batch: %w", err)
+	}
+
+	created := make([]domain.Notification, len(ns))
+	for i, id := range ids {
+		created[i] = byID[id]
 	}
 	return created, nil
 }

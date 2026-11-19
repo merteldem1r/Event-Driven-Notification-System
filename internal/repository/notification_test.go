@@ -247,3 +247,74 @@ func TestCreate_ConcurrentSameKey(t *testing.T) {
 		t.Errorf("rows with the key = %d, want 1", rows)
 	}
 }
+
+func batchOf(size int, batchID uuid.UUID) []domain.Notification {
+	ns := make([]domain.Notification, size)
+	for i := range ns {
+		ns[i] = domain.Notification{
+			BatchID: &batchID, CorrelationID: ptr("corr-batch"),
+			Channel: domain.ChannelSMS, Recipient: "+905551234567", Content: fmt.Sprintf("message %d", i),
+			Priority: domain.PriorityNormal,
+		}
+	}
+	return ns
+}
+
+func countBatch(t *testing.T, batchID uuid.UUID) int {
+	t.Helper()
+	var n int
+	if err := testDB.QueryRow(t.Context(), `SELECT count(*) FROM notifications WHERE batch_id = $1`, batchID).Scan(&n); err != nil {
+		t.Fatalf("count batch: %v", err)
+	}
+	return n
+}
+
+func TestCreateBatch(t *testing.T) {
+	repo := NewNotifications(testDB)
+	batchID := uuid.New()
+	in := batchOf(3, batchID)
+
+	created, err := repo.CreateBatch(t.Context(), in)
+	if err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+	if len(created) != len(in) {
+		t.Fatalf("got %d notifications, want %d", len(created), len(in))
+	}
+	for i, n := range created {
+		// Same order as the input, with everything stored.
+		if n.Content != in[i].Content || n.BatchID == nil || *n.BatchID != batchID ||
+			n.CorrelationID == nil || *n.CorrelationID != "corr-batch" || n.Status != domain.StatusPending {
+			t.Errorf("created[%d] = %+v, want input %d stored as pending in the batch", i, n, i)
+		}
+		got, err := repo.GetByID(t.Context(), n.ID)
+		if err != nil || !reflect.DeepEqual(got, n) {
+			t.Errorf("GetByID(created[%d]) = %+v, %v", i, got, err)
+		}
+	}
+}
+
+// IMP-8: 1000 rows go in as one statement.
+func TestCreateBatch_MaxSize(t *testing.T) {
+	batchID := uuid.New()
+	if _, err := NewNotifications(testDB).CreateBatch(t.Context(), batchOf(domain.MaxBatchSize, batchID)); err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+	if n := countBatch(t, batchID); n != domain.MaxBatchSize {
+		t.Errorf("rows in batch = %d, want %d", n, domain.MaxBatchSize)
+	}
+}
+
+// One bad row fails the single statement, so no row of the batch is saved.
+func TestCreateBatch_AllOrNothing(t *testing.T) {
+	batchID := uuid.New()
+	ns := batchOf(5, batchID)
+	ns[3].Channel = "fax" // bypasses Go validation; the CHECK constraint rejects it
+
+	if _, err := NewNotifications(testDB).CreateBatch(t.Context(), ns); err == nil {
+		t.Fatal("CreateBatch succeeded, want a constraint error")
+	}
+	if n := countBatch(t, batchID); n != 0 {
+		t.Errorf("rows in batch = %d, want 0", n)
+	}
+}

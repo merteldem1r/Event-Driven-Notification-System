@@ -135,6 +135,74 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /api/v1/notifications/batch:
+    post:
+      tags: [notifications]
+      operationId: createNotificationBatch
+      summary: Create up to 1,000 notifications at once
+      description: |
+        Validates every notification and stores them together under a new `batch_id`, in one
+        database statement. **All or nothing:** if any item is invalid, nothing is stored and the
+        `400` lists every invalid item by position, e.g. `notifications[3].recipient`.
+
+        Each item follows the same rules as a single create. The body may be up to 10 MB.
+      parameters:
+        - $ref: "#/components/parameters/CorrelationID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBatchRequest"
+            example:
+              notifications:
+                - channel: sms
+                  recipient: "+905551234567"
+                  content: Sale starts now!
+                  priority: high
+                - channel: email
+                  recipient: user@example.com
+                  content: Sale starts now!
+      responses:
+        "202":
+          description: Accepted and queued. `ids[i]` is the notification created from `notifications[i]`.
+          headers:
+            Location:
+              description: URL of the batch status.
+              schema:
+                type: string
+                example: /api/v1/batches/3f2c9a1e-7b4d-4c1a-9e8f-1a2b3c4d5e6f
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchCreated"
+        "400":
+          description: |
+            The body can't be read (`invalid_body`), or the batch is empty, has more than 1,000
+            items, or contains an invalid item (`validation_failed`).
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: validation_failed
+                  message: the request has invalid fields
+                  details:
+                    - field: notifications[3].recipient
+                      message: must be a phone number in E.164 format, e.g. +905551234567
+        "413":
+          $ref: "#/components/responses/BodyTooLarge"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /api/v1/notifications/{id}:
     get:
       tags: [notifications]
@@ -344,6 +412,42 @@ components:
             - $ref: "#/components/schemas/Priority"
           default: normal
 
+    CreateBatchRequest:
+      type: object
+      additionalProperties: false
+      required: [notifications]
+      properties:
+        notifications:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          items:
+            $ref: "#/components/schemas/CreateNotificationRequest"
+
+    BatchCreated:
+      type: object
+      required: [batch_id, count, ids]
+      properties:
+        batch_id:
+          type: string
+          format: uuid
+        count:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        ids:
+          type: array
+          description: IDs of the created notifications, in the order of the request.
+          items:
+            type: string
+            format: uuid
+      example:
+        batch_id: 3f2c9a1e-7b4d-4c1a-9e8f-1a2b3c4d5e6f
+        count: 2
+        ids:
+          - 7c9e6679-7425-40de-944b-e07fc1f90ae7
+          - 2ff4f8b7-e533-404b-acce-cd5ea1fa298b
+
     Notification:
       type: object
       required: [id, channel, recipient, content, priority, status, attempts, created_at, updated_at]
@@ -434,7 +538,7 @@ components:
       properties:
         field:
           type: string
-          description: The invalid field, or the header name (`Idempotency-Key`).
+          description: The invalid field (`notifications[3].recipient` in a batch), or the header name (`Idempotency-Key`).
           example: recipient
         message:
           type: string

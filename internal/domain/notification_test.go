@@ -159,3 +159,46 @@ func TestSameRequest(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateBatch(t *testing.T) {
+	valid := Notification{Channel: ChannelSMS, Recipient: "+905551234567", Content: "hello", Priority: PriorityNormal}
+	noRecipient, noContent := valid, valid
+	noRecipient.Recipient = ""
+	noContent.Content = ""
+
+	tests := []struct {
+		name       string
+		batch      []Notification
+		wantFields []string // nil means valid
+	}{
+		{"one valid", []Notification{valid}, nil},
+		{"max size", slices.Repeat([]Notification{valid}, MaxBatchSize), nil},
+		{"empty", nil, []string{"notifications"}},
+		{"too many", slices.Repeat([]Notification{valid}, MaxBatchSize+1), []string{"notifications"}},
+		{"invalid items are named by position", []Notification{valid, noRecipient, valid, noContent},
+			[]string{"notifications[1].recipient", "notifications[3].content"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateBatch(tt.batch)
+			if tt.wantFields == nil {
+				if err != nil {
+					t.Fatalf("ValidateBatch = %v, want nil", err)
+				}
+				return
+			}
+			var ve *ValidationError
+			if !errors.As(err, &ve) {
+				t.Fatalf("ValidateBatch = %v, want a *ValidationError", err)
+			}
+			var got []string
+			for _, f := range ve.Fields {
+				got = append(got, f.Field)
+			}
+			if !slices.Equal(got, tt.wantFields) {
+				t.Errorf("invalid fields = %v, want %v", got, tt.wantFields)
+			}
+		})
+	}
+}

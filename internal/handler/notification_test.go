@@ -24,6 +24,7 @@ type fakeNotificationService struct {
 	replayed bool // what Create reports
 	calls    int
 	got      domain.Notification
+	gotBatch []domain.Notification
 }
 
 var (
@@ -40,6 +41,23 @@ func (f *fakeNotificationService) Create(_ context.Context, n domain.Notificatio
 	}
 	n.ID, n.Status, n.CreatedAt, n.UpdatedAt = fakeID, domain.StatusPending, fakeCreatedAt, fakeCreatedAt
 	return n, f.replayed, nil
+}
+
+var fakeBatchID = uuid.MustParse("3f2c9a1e-7b4d-4c1a-9e8f-1a2b3c4d5e6f")
+
+// CreateBatch gives every notification a new ID under fakeBatchID.
+func (f *fakeNotificationService) CreateBatch(_ context.Context, ns []domain.Notification) (uuid.UUID, []domain.Notification, error) {
+	f.calls++
+	f.gotBatch = ns
+	if f.err != nil {
+		return uuid.Nil, nil, f.err
+	}
+	created := make([]domain.Notification, len(ns))
+	for i, n := range ns {
+		n.ID, n.BatchID, n.Status = uuid.New(), &fakeBatchID, domain.StatusPending
+		created[i] = n
+	}
+	return fakeBatchID, created, nil
 }
 
 // Get knows only fakeID, as a sent notification.
@@ -303,5 +321,95 @@ func TestGetNotification_Errors(t *testing.T) {
 				t.Errorf("service called = %v, want %v", called, tt.wantCalled)
 			}
 		})
+	}
+}
+
+// postBatch sends body to POST /api/v1/notifications/batch through the full router.
+func postBatch(t *testing.T, svc NotificationService, body string, headers ...string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/notifications/batch", strings.NewReader(body))
+	for i := 0; i+1 < len(headers); i += 2 {
+		req.Header.Set(headers[i], headers[i+1])
+	}
+	rec := httptest.NewRecorder()
+	NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, svc).ServeHTTP(rec, req)
+	return rec
+}
+
+func TestCreateNotificationBatch_Accepted(t *testing.T) {
+	svc := &fakeNotificationService{}
+	rec := postBatch(t, svc, `{"notifications":[
+		{"channel":"sms","recipient":"+905551234567","content":"one","priority":"high"},
+		{"channel":"email","recipient":"user@example.com","content":"two"}
+	]}`, "X-Correlation-ID", "campaign-7")
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body: %s", rec.Code, rec.Body)
+	}
+	if loc := rec.Header().Get("Location"); loc != "/api/v1/batches/"+fakeBatchID.String() {
+		t.Errorf("Location = %q", loc)
+	}
+
+	// Items reach the service in order, with the priority default and the correlation ID.
+	want := []domain.Notification{
+		{CorrelationID: ptr("campaign-7"), Channel: domain.ChannelSMS, Recipient: "+905551234567",
+			Content: "one", Priority: domain.PriorityHigh},
+		{CorrelationID: ptr("campaign-7"), Channel: domain.ChannelEmail, Recipient: "user@example.com",
+			Content: "two", Priority: domain.PriorityNormal},
+	}
+	if !reflect.DeepEqual(svc.gotBatch, want) {
+		t.Errorf("service got %+v\nwant %+v", svc.gotBatch, want)
+	}
+
+	var body batchCreatedResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body: %v", err)
+	}
+	if body.BatchID != fakeBatchID || body.Count != 2 || len(body.IDs) != 2 || body.IDs[0] == body.IDs[1] {
+		t.Errorf("body = %+v, want batch %s, count 2 and two different ids", body, fakeBatchID)
+	}
+}
+
+func TestCreateNotificationBatch_Errors(t *testing.T) {
+	invalid := &domain.ValidationError{Fields: []domain.FieldError{{Field: "notifications[1].recipient", Message: "is required"}}}
+
+	tests := []struct {
+		name       string
+		body       string
+		svcErr     error
+		wantStatus int
+		wantCode   string
+	}{
+		{"invalid item", `{"notifications":[{}]}`, invalid, http.StatusBadRequest, codeValidationFailed},
+		{"unknown field inside an item", `{"notifications":[{"recipent":"x"}]}`, nil, http.StatusBadRequest, codeInvalidBody},
+		{"bare array instead of an object", `[{}]`, nil, http.StatusBadRequest, codeInvalidBody},
+		{"larger than the batch limit", `{"notifications":[{"content":"` + strings.Repeat("a", maxBatchBodyBytes) + `"}]}`,
+			nil, http.StatusRequestEntityTooLarge, codeBodyTooLarge},
+		{"service failure is hidden", `{"notifications":[{}]}`, errors.New("boom"), http.StatusInternalServerError, codeInternal},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &fakeNotificationService{err: tt.svcErr}
+			rec := postBatch(t, svc, tt.body)
+
+			var got errorResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+				t.Fatalf("body is not the error format: %v\n%s", err, rec.Body)
+			}
+			if rec.Code != tt.wantStatus || got.Error.Code != tt.wantCode {
+				t.Errorf("got %d %q, want %d %q", rec.Code, got.Error.Code, tt.wantStatus, tt.wantCode)
+			}
+		})
+	}
+}
+
+// A batch larger than the single-notification cap (1 MB) is still accepted.
+func TestCreateNotificationBatch_AllowsBodiesOverOneMB(t *testing.T) {
+	item := `{"channel":"email","recipient":"user@example.com","content":"` + strings.Repeat("a", 5000) + `"}`
+	body := `{"notifications":[` + strings.TrimSuffix(strings.Repeat(item+",", 300), ",") + `]}` // about 1.5 MB
+
+	svc := &fakeNotificationService{}
+	if rec := postBatch(t, svc, body); rec.Code != http.StatusAccepted || len(svc.gotBatch) != 300 {
+		t.Errorf("status %d with %d items, want 202 with 300", rec.Code, len(svc.gotBatch))
 	}
 }
