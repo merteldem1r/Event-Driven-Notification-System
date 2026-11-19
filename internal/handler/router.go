@@ -15,7 +15,8 @@ import (
 func NewRouter(logger *slog.Logger, db Pinger, notifications NotificationService) http.Handler {
 	r := chi.NewRouter()
 
-	r.Use(RequestLogger(logger)) // outermost, so it also logs 500s from Recoverer
+	r.Use(CorrelationID)         // first, so every later log line has the ID
+	r.Use(RequestLogger(logger)) // before Recoverer, so it also logs the 500s Recoverer produces
 	r.Use(middleware.Recoverer)  // panic -> 500 instead of a crash
 
 	// Unknown URLs and wrong methods use the same JSON error format as everything else (D11).

@@ -22,6 +22,7 @@
 | D10 | Loading a local `.env.local` for development | Phase 2 | Decided: godotenv |
 | D11 | API error format, create response, unknown JSON fields | Phase 4 (create API) | Decided: own envelope, full notification, reject |
 | D12 | Idempotency key behavior | Phase 4 (create API) | Decided: see D12 below |
+| D13 | Correlation ID header and client IDs | Phase 4 (create API) | Decided: `X-Correlation-ID`, accept safe client IDs |
 
 **Why only D1–D3 now?** They decide *what the database schema looks like, how workers are
 written, and what runs in docker-compose*. Changing them later means rewriting a lot.
@@ -292,3 +293,4 @@ handled in Phase 8.
 | D10 | Local `.env.local` loading | **godotenv**, via `config.LoadDotEnv` at startup; missing file ignored; never overrides existing variables | Works with `make run-api`, plain `go run` and the IDE debugger; real environment wins over the file; no effect in Docker/production (file not in the image) | One small dependency; one local-only line in startup code (alternative was loading it in the Makefile) | 2026-11-19 |
 | D11 | API conventions | **Own error envelope** `{"error": {code, message, details}}` for every error; **202 returns the full notification** plus a `Location` header; **unknown JSON fields are rejected** with 400 | One simple, readable error shape with stable codes; create and get share one response shape; typos surface immediately | The RFC 9457 Problem Details standard; tolerance for clients that send extra fields | 2026-11-20 |
 | D12 | Idempotency key | **Optional `Idempotency-Key` header** (1 to 255 visible ASCII); repeat with the same request → original `202` + `Idempotent-Replayed: true`; repeat with a different request → `422 idempotency_key_reused`; key used while its row exists; `INSERT ... ON CONFLICT DO NOTHING` | Retries become safe for clients; key reuse bugs surface; the unique index makes it race-free across API instances | Key expiry and per-client scopes | 2026-11-20 |
+| D13 | Correlation ID | **`X-Correlation-ID` header**; a client ID of 1 to 128 characters `[A-Za-z0-9._:-]` is kept, anything else (missing, unsafe, too long) is replaced by a new UUID, never rejected; returned on every response, added to every log line through a slog handler wrapper, stored on the notification for the worker | One search finds every log line of a request, later across API and worker; the client's own ID links our logs to theirs; validation keeps log lines clean | W3C `traceparent` (comes with tracing, Phase 13) | 2026-11-20 |

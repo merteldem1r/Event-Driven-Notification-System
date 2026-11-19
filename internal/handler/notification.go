@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/domain"
+	"github.com/merteldem1r/Event-Driven-Notification-System/internal/logging"
 )
 
 // NotificationService is what the notification handlers need from the service layer.
@@ -43,6 +44,7 @@ type notificationResponse struct {
 	Attempts          int        `json:"attempts"`
 	LastError         *string    `json:"last_error,omitempty"`
 	ProviderMessageID *string    `json:"provider_message_id,omitempty"`
+	CorrelationID     *string    `json:"correlation_id,omitempty"` // of the request that created it
 	CreatedAt         time.Time  `json:"created_at"`
 	UpdatedAt         time.Time  `json:"updated_at"`
 }
@@ -59,6 +61,7 @@ func toNotificationResponse(n domain.Notification) notificationResponse {
 		Attempts:          n.Attempts,
 		LastError:         n.LastError,
 		ProviderMessageID: n.ProviderMessageID,
+		CorrelationID:     n.CorrelationID,
 		CreatedAt:         n.CreatedAt.UTC(), // same time zone for every client
 		UpdatedAt:         n.UpdatedAt.UTC(),
 	}
@@ -87,6 +90,10 @@ func CreateNotification(svc NotificationService, logger *slog.Logger) http.Handl
 		// Optional. Values (not Get) tells "header missing" apart from "header sent empty".
 		if keys := r.Header.Values(headerIdempotencyKey); len(keys) > 0 {
 			n.IdempotencyKey = &keys[0]
+		}
+		// Stored on the row so the worker can log with the same ID later.
+		if id := logging.CorrelationID(r.Context()); id != "" {
+			n.CorrelationID = &id
 		}
 
 		created, replayed, err := svc.Create(r.Context(), n)

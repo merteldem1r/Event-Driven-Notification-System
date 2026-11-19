@@ -59,6 +59,7 @@ internal/
   database/         database connection setup
   provider/         external provider interface and implementations
   ratelimit/        shared rate limiter
+  logging/          request-scoped log fields (correlation ID)
 migrations/         versioned SQL schema migrations
 docs/               documentation
 .githooks/          local Git hooks (enable with `make hooks`)

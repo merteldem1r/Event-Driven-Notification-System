@@ -14,6 +14,7 @@ import (
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/config"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/database"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/handler"
+	"github.com/merteldem1r/Event-Driven-Notification-System/internal/logging"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/repository"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/service"
 )
@@ -37,7 +38,10 @@ func run() error {
 		return err
 	}
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
+	// JSON to stdout; the wrapper adds correlation_id to every line logged with a request context.
+	logger := slog.New(logging.NewHandler(
+		slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}),
+	))
 	slog.SetDefault(logger)
 
 	// Fail fast if the database isn't reachable at startup.

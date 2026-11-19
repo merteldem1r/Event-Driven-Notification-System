@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -75,7 +76,8 @@ func postNotification(t *testing.T, svc NotificationService, body string, header
 func TestCreateNotification_Accepted(t *testing.T) {
 	svc := &fakeNotificationService{}
 	rec := postNotification(t, svc,
-		`{"channel":"sms","recipient":"+905551234567","content":"hello","priority":"high"}`)
+		`{"channel":"sms","recipient":"+905551234567","content":"hello","priority":"high"}`,
+		"X-Correlation-ID", "shop-req-42")
 
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202; body: %s", rec.Code, rec.Body)
@@ -88,9 +90,10 @@ func TestCreateNotification_Accepted(t *testing.T) {
 	}
 
 	want := domain.Notification{
-		Channel: domain.ChannelSMS, Recipient: "+905551234567", Content: "hello", Priority: domain.PriorityHigh,
+		CorrelationID: ptr("shop-req-42"), // stored so the worker can log with it
+		Channel:       domain.ChannelSMS, Recipient: "+905551234567", Content: "hello", Priority: domain.PriorityHigh,
 	}
-	if svc.got != want {
+	if !reflect.DeepEqual(svc.got, want) { // DeepEqual compares what pointers point to
 		t.Errorf("service got %+v, want %+v", svc.got, want)
 	}
 
@@ -99,14 +102,15 @@ func TestCreateNotification_Accepted(t *testing.T) {
 		t.Fatalf("body is not JSON: %v", err)
 	}
 	for field, wantValue := range map[string]any{
-		"id":         fakeID.String(),
-		"channel":    "sms",
-		"recipient":  "+905551234567",
-		"content":    "hello",
-		"priority":   "high",
-		"status":     "pending",
-		"attempts":   float64(0), // JSON numbers decode as float64
-		"created_at": "2026-11-20T10:00:00Z",
+		"id":             fakeID.String(),
+		"channel":        "sms",
+		"recipient":      "+905551234567",
+		"content":        "hello",
+		"priority":       "high",
+		"status":         "pending",
+		"attempts":       float64(0), // JSON numbers decode as float64
+		"correlation_id": "shop-req-42",
+		"created_at":     "2026-11-20T10:00:00Z",
 	} {
 		if body[field] != wantValue {
 			t.Errorf("%s = %v, want %v", field, body[field], wantValue)

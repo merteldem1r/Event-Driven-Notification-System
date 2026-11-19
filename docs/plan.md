@@ -9,7 +9,7 @@ is tested. Then we stop, explain it, and the user commits it.
 
 Status: `[x]` done, `[ ]` not done. The next step is marked **(next)**.
 
-> **Current position:** Phase 4, step **4.6** (correlation ID middleware).
+> **Current position:** Phase 4, step **4.7** (OpenAPI spec for the Phase 4 endpoints).
 
 ---
 
@@ -46,8 +46,8 @@ Goal: the schema exists and Go code can read/write it, tested against a real Pos
 - [x] 4.3 `GET /api/v1/notifications/{id}` → `200` with the notification; unknown ID → `404 not_found`, malformed ID → `400 invalid_id` (API-3)
 - [x] 4.4 Idempotency key (D12): optional `Idempotency-Key` header; replay returns the original `202` + `Idempotent-Replayed: true`; different body → `422`; `INSERT ... ON CONFLICT DO NOTHING`; concurrency test against real Postgres (PROC-5, API level)
 - [x] 4.5 JSON error envelope for unknown routes (`404 route_not_found`) and wrong methods (`405 method_not_allowed` with an `Allow` header), so every error follows D11
-- [ ] 4.6 Correlation ID middleware, added to every log line (OBS-3) **(next)**
-- [ ] 4.7 OpenAPI spec for these endpoints (DEL-4)
+- [x] 4.6 Correlation ID (D13): `X-Correlation-ID` middleware (client ID kept if safe, else a new UUID), returned on every response, added to every log line by `internal/logging`, stored on the notification (OBS-3, API side)
+- [ ] 4.7 OpenAPI spec for these endpoints (DEL-4) **(next)**
 
 **Verify:** create via Postman → 202; get → `pending`; same idempotency key → same notification; invalid input → 400.
 
