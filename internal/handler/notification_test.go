@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -38,6 +39,24 @@ func (f *fakeNotificationService) Create(_ context.Context, n domain.Notificatio
 	n.ID, n.Status, n.CreatedAt, n.UpdatedAt = fakeID, domain.StatusPending, fakeCreatedAt, fakeCreatedAt
 	return n, nil
 }
+
+// Get knows only fakeID, as a sent notification.
+func (f *fakeNotificationService) Get(_ context.Context, id uuid.UUID) (domain.Notification, error) {
+	f.calls++
+	if f.err != nil {
+		return domain.Notification{}, f.err
+	}
+	if id != fakeID {
+		return domain.Notification{}, fmt.Errorf("get notification %s: %w", id, domain.ErrNotFound)
+	}
+	return domain.Notification{
+		ID: fakeID, Channel: domain.ChannelEmail, Recipient: "user@example.com", Content: "hi",
+		Priority: domain.PriorityLow, Status: domain.StatusSent, Attempts: 1,
+		ProviderMessageID: ptr("msg-42"), CreatedAt: fakeCreatedAt, UpdatedAt: fakeCreatedAt,
+	}, nil
+}
+
+func ptr[T any](v T) *T { return &v }
 
 // postNotification sends body to POST /api/v1/notifications through the full router.
 func postNotification(t *testing.T, svc NotificationService, body string) *httptest.ResponseRecorder {
@@ -170,6 +189,63 @@ func TestCreateNotification_Errors(t *testing.T) {
 			}
 			if tt.svcErr == nil && svc.calls != 0 {
 				t.Error("service was called for an unreadable body")
+			}
+		})
+	}
+}
+
+// getNotification sends GET /api/v1/notifications/{id} through the full router.
+func getNotification(t *testing.T, svc NotificationService, id string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/notifications/"+id, nil)
+	rec := httptest.NewRecorder()
+	NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, svc).ServeHTTP(rec, req)
+	return rec
+}
+
+func TestGetNotification_Found(t *testing.T) {
+	rec := getNotification(t, &fakeNotificationService{}, fakeID.String())
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body)
+	}
+	want := `{"id":"` + fakeID.String() + `","channel":"email","recipient":"user@example.com","content":"hi",` +
+		`"priority":"low","status":"sent","attempts":1,"provider_message_id":"msg-42",` +
+		`"created_at":"2026-11-20T10:00:00Z","updated_at":"2026-11-20T10:00:00Z"}`
+	if got := strings.TrimSpace(rec.Body.String()); got != want {
+		t.Errorf("body =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestGetNotification_Errors(t *testing.T) {
+	tests := []struct {
+		name       string
+		id         string
+		svcErr     error
+		wantStatus int
+		wantCode   string
+		wantCalled bool
+	}{
+		{"unknown id", uuid.NewString(), nil, http.StatusNotFound, codeNotFound, true},
+		{"malformed id", "not-a-uuid", nil, http.StatusBadRequest, codeInvalidID, false},
+		{"service failure is hidden", fakeID.String(), errors.New("connection refused"),
+			http.StatusInternalServerError, codeInternal, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &fakeNotificationService{err: tt.svcErr}
+			rec := getNotification(t, svc, tt.id)
+
+			if rec.Code != tt.wantStatus {
+				t.Errorf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			var got errorResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || got.Error.Code != tt.wantCode {
+				t.Errorf("body = %s, want code %q", rec.Body, tt.wantCode)
+			}
+			if called := svc.calls > 0; called != tt.wantCalled {
+				t.Errorf("service called = %v, want %v", called, tt.wantCalled)
 			}
 		})
 	}

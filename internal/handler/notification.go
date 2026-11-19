@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/domain"
@@ -14,6 +15,7 @@ import (
 // NotificationService is what the notification handlers need from the service layer.
 type NotificationService interface {
 	Create(ctx context.Context, n domain.Notification) (domain.Notification, error)
+	Get(ctx context.Context, id uuid.UUID) (domain.Notification, error)
 }
 
 type createNotificationRequest struct {
@@ -87,5 +89,24 @@ func CreateNotification(svc NotificationService, logger *slog.Logger) http.Handl
 
 		w.Header().Set("Location", "/api/v1/notifications/"+created.ID.String())
 		writeJSON(w, http.StatusAccepted, toNotificationResponse(created))
+	}
+}
+
+// GetNotification handles GET /api/v1/notifications/{id}: it returns one notification and its status.
+func GetNotification(svc NotificationService, logger *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// A malformed ID is a client mistake (400), not a missing notification (404).
+		id, err := uuid.Parse(chi.URLParam(r, "id"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, codeInvalidID, "id must be a UUID")
+			return
+		}
+
+		n, err := svc.Get(r.Context(), id)
+		if err != nil {
+			writeServiceError(w, r, logger, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, toNotificationResponse(n))
 	}
 }

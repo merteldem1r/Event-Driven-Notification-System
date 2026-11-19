@@ -14,6 +14,8 @@ const (
 	codeInvalidBody      = "invalid_body"
 	codeBodyTooLarge     = "body_too_large"
 	codeValidationFailed = "validation_failed"
+	codeInvalidID        = "invalid_id"
+	codeNotFound         = "not_found"
 	codeInternal         = "internal_error"
 )
 
@@ -56,6 +58,11 @@ func writeServiceError(w http.ResponseWriter, r *http.Request, logger *slog.Logg
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: errorBody{
 			Code: codeValidationFailed, Message: "the request has invalid fields", Details: details,
 		}})
+		return
+	}
+
+	if errors.Is(err, domain.ErrNotFound) {
+		writeError(w, http.StatusNotFound, codeNotFound, "the requested item was not found")
 		return
 	}
 

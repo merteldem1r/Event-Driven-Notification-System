@@ -20,9 +20,18 @@ func (f *fakeStore) Create(_ context.Context, n domain.Notification) (domain.Not
 	if f.err != nil {
 		return domain.Notification{}, f.err
 	}
-	f.saved = append(f.saved, n)
 	n.ID, n.Status = uuid.New(), domain.StatusPending
+	f.saved = append(f.saved, n)
 	return n, nil
+}
+
+func (f *fakeStore) GetByID(_ context.Context, id uuid.UUID) (domain.Notification, error) {
+	for _, n := range f.saved {
+		if n.ID == id {
+			return n, nil
+		}
+	}
+	return domain.Notification{}, domain.ErrNotFound
 }
 
 func validNotification() domain.Notification {
@@ -68,5 +77,22 @@ func TestCreate_WrapsStoreError(t *testing.T) {
 	_, err := NewNotifications(&fakeStore{err: storeErr}).Create(t.Context(), validNotification())
 	if !errors.Is(err, storeErr) {
 		t.Errorf("err = %v, want it to wrap %v", err, storeErr)
+	}
+}
+
+func TestGet(t *testing.T) {
+	svc := NewNotifications(&fakeStore{})
+	created, err := svc.Create(t.Context(), validNotification())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	got, err := svc.Get(t.Context(), created.ID)
+	if err != nil || got != created {
+		t.Errorf("Get = %+v, %v; want %+v", got, err, created)
+	}
+
+	if _, err := svc.Get(t.Context(), uuid.New()); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("Get(unknown) err = %v, want domain.ErrNotFound", err)
 	}
 }

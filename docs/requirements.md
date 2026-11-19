@@ -16,7 +16,7 @@ Status values: **Done**, **Partial**, **Todo**.
 |---|---|---|---|---|
 | API-1 | Create a notification with recipient, channel, content and priority | Done | 4 | `POST /api/v1/notifications` → `202` with the stored notification; priority optional (default `normal`) |
 | API-2 | Batch creation, up to 1000 notifications per request | Todo | 5 | Shared batch ID; all-or-nothing vs partial is decision D5 |
-| API-3 | Query notification status by ID | Todo | 4 | |
+| API-3 | Query notification status by ID | Done | 4 | `GET /api/v1/notifications/{id}`; 404 if unknown, 400 if the ID is not a UUID |
 | API-4 | Query status by batch ID | Todo | 5 | Summary counts per status |
 | API-5 | Cancel pending notifications | Todo | 5 | Atomic: only if still `pending`/`scheduled` |
 | API-6 | List notifications with filters (status, channel, date range) | Todo | 5 | |

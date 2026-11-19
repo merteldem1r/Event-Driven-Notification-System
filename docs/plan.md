@@ -9,7 +9,7 @@ is tested. Then we stop, explain it, and the user commits it.
 
 Status: `[x]` done, `[ ]` not done. The next step is marked **(next)**.
 
-> **Current position:** Phase 4, step **4.3** (`GET /api/v1/notifications/{id}`).
+> **Current position:** Phase 4, step **4.4** (idempotency key).
 
 ---
 
@@ -43,8 +43,8 @@ Goal: the schema exists and Go code can read/write it, tested against a real Pos
 ## Phase 4 · API: create and get one notification
 - [x] 4.1 Validation rules for notifications: required fields, allowed values, recipient format, content limits per channel (D4 decided); all field errors returned together
 - [x] 4.2 Notification service; error envelope (D11); strict JSON body reading (1 MB cap, unknown fields rejected); `POST /api/v1/notifications` → `202` with the full notification and `Location`; priority defaults to `normal` (API-1, PROC-4)
-- [ ] 4.3 `GET /api/v1/notifications/{id}` (API-3) **(next)**
-- [ ] 4.4 Idempotency key (PROC-5, API level)
+- [x] 4.3 `GET /api/v1/notifications/{id}` → `200` with the notification; unknown ID → `404 not_found`, malformed ID → `400 invalid_id` (API-3)
+- [ ] 4.4 Idempotency key (PROC-5, API level) **(next)**
 - [ ] 4.5 Correlation ID middleware, added to every log line (OBS-3)
 - [ ] 4.6 OpenAPI spec for these endpoints (DEL-4)
 
