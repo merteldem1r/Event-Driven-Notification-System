@@ -1,4 +1,7 @@
-.PHONY: hooks run-api test up down infra-up logs
+.PHONY: hooks run-api test lint check up down infra-up logs
+
+# Same version as CI (.github/workflows/ci.yml). Change both together.
+GOLANGCI_LINT_VERSION := v2.15.0
 
 ## hooks: use the repo's Git hooks in .githooks (run once after cloning)
 hooks:
@@ -9,9 +12,20 @@ hooks:
 run-api:
 	go run ./cmd/api
 
-## test: run all tests
+## test: run all tests with the race detector
 test:
-	go test ./...
+	go test -race ./...
+
+## lint: run golangci-lint in Docker (nothing to install; the cache volume keeps reruns fast)
+lint:
+	docker run --rm -v "$(CURDIR)":/app -w /app -v golangci-lint-cache:/root/.cache \
+		golangci/golangci-lint:$(GOLANGCI_LINT_VERSION) golangci-lint run ./...
+
+## check: everything CI checks (vet, lint, tests); run before pushing
+check:
+	go vet ./...
+	$(MAKE) lint
+	$(MAKE) test
 
 ## up: build and start the whole system in Docker (in the background)
 up:

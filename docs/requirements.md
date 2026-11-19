@@ -69,7 +69,7 @@ Status values: **Done**, **Partial**, **Todo**.
 | OPT-3 | Template system with variable substitution | Todo | 11 | |
 | OPT-4 | WebSocket real-time status updates | Todo | 12 | Redis pub/sub between worker and API |
 | OPT-5 | Distributed tracing | Todo | 13 | OpenTelemetry + Jaeger |
-| OPT-6 | GitHub Actions CI/CD: automated testing and linting | Partial | 2, 14 | Commit-message check (done); lint + tests pending |
+| OPT-6 | GitHub Actions CI/CD: automated testing and linting | Partial | 2, 14 | Commit-message check, lint, vet, tests with race detector (done); image build and more checks in Phase 14 |
 
 ## 7. Deliverables
 
@@ -80,7 +80,7 @@ Status values: **Done**, **Partial**, **Todo**.
 | DEL-3 | Docker Compose: one-command setup (`docker compose up`) | Partial | 2 | Dockerfile + compose with api, PostgreSQL, Redis (done); worker and migrations join in later phases |
 | DEL-4 | API documentation: Swagger/OpenAPI specification | Todo | 4–15 | Grows with each endpoint |
 | DEL-5 | Database migrations: versioned schema changes | Todo | 3 | golang-migrate |
-| DEL-6 | Test suite runnable with a single command | Partial | all | `make test` (done); grows with each step |
+| DEL-6 | Test suite runnable with a single command | Partial | all | `make test` (race detector) and `make check` (done); grows with each step |
 
 ## 8. Implied requirements (not written, but expected)
 

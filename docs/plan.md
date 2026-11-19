@@ -9,7 +9,7 @@ is tested. Then we stop, explain it, and the user commits it.
 
 Status: `[x]` done, `[ ]` not done. The next step is marked **(next)**.
 
-> **Current position:** Phase 2, step **2.5** (linting + CI job for vet, lint and tests).
+> **Current position:** Phase 3, step **3.1** (pgx connection pool, `DATABASE_URL`, `/health` checks the DB).
 
 ---
 
@@ -20,20 +20,20 @@ Status: `[x]` done, `[ ]` not done. The next step is marked **(next)**.
 ## Phase 1 · Key design decisions
 - [x] 1.1 D1 queue = PostgreSQL, D2 rate limiter = Redis, D3 tooling (`docs/application/02-design-decisions.md`)
 
-## Phase 2 · Project skeleton
+## Phase 2 · Project skeleton (done)
 Goal: a running service in Docker with the basic tooling around it.
 - [x] 2.1 API server: config from env, JSON logging, chi router (`/health`, `/api/v1` group), timeouts, graceful shutdown, first test
 - [x] 2.2 Dockerfile for the API (multi-stage build, distroless non-root image, `.dockerignore`)
 - [x] 2.3 Request-logging middleware: one JSON log line per request (method, path, status, bytes, duration)
 - [x] 2.4 `docker-compose.yml`: api + PostgreSQL + Redis, with health checks and a data volume; Makefile shortcuts (`up`, `down`, `infra-up`, `logs`)
-- [ ] 2.5 Linting (golangci-lint) + CI job running vet, lint and tests **(next)**
+- [x] 2.5 Linting (golangci-lint in Docker, pinned version) + CI workflow running vet, lint and tests; `make lint`, `make check`
 
 **Verify:** `docker compose up` starts everything; `GET /health` → 200; CI green.
 **Summary:** `docs/application/03-project-skeleton.md`.
 
 ## Phase 3 · Database
 Goal: the schema exists and Go code can read/write it, tested against a real Postgres.
-- [ ] 3.1 pgx connection pool, `DATABASE_URL` config, `/health` checks the DB
+- [ ] 3.1 pgx connection pool, `DATABASE_URL` config, `/health` checks the DB **(next)**
 - [ ] 3.2 golang-migrate as a one-off compose service; first migration (`notifications` table with queue columns)
 - [ ] 3.3 Repository: insert + get by ID; integration tests with testcontainers
 

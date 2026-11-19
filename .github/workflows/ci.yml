@@ -1,0 +1,34 @@
+name: CI
+
+# Runs the same checks as `make check` on every push and pull request.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read # this workflow only reads the code
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod # use the Go version declared in go.mod
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.15.0 # keep in sync with GOLANGCI_LINT_VERSION in the Makefile
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Vet
+        run: go vet ./...
+      - name: Test (with race detector)
+        run: go test -race ./...

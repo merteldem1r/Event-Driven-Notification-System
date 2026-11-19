@@ -80,7 +80,7 @@ New packages follow the same idea: one clear responsibility per package, named a
 
 ## Coding conventions
 
-- `gofmt` and `go vet` clean; linter clean once configured.
+- `make check` (vet, golangci-lint, tests with the race detector) passes before every commit; CI runs the same checks.
 - **Errors:** return, don't panic; wrap with context (`fmt.Errorf("doing x: %w", err)`); only the
   HTTP layer maps errors to status codes; never ignore an error without a comment explaining why.
 - **Logging:** `log/slog`, JSON to stdout, key-value fields; include correlation and notification IDs

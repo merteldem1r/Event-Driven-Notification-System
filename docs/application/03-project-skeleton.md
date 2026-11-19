@@ -3,7 +3,7 @@
 > **Result:** a runnable API service with configuration, JSON logging, request logging, a health
 > endpoint and graceful shutdown, packaged as a Docker image and started together with PostgreSQL
 > and Redis by Docker Compose.
-> **Status:** steps 2.1–2.4 done; 2.5 (linting + CI) open.
+> **Status:** done.
 
 ## What was implemented
 
@@ -16,7 +16,9 @@
 | Health check | `internal/handler/health.go` | Liveness only: `{"status":"ok"}`. DB/Redis checks come in Phase 3 |
 | Docker image | `Dockerfile`, `.dockerignore` | Multi-stage: Go build stage → distroless non-root image (~15 MB) |
 | Local stack | `docker-compose.yml` | `api` (built from the Dockerfile), `postgres:17-alpine` (volume), `redis:7-alpine` |
-| Commands | `Makefile` | `run-api`, `test`, `up`, `down`, `infra-up`, `logs`, `hooks` |
+| Commands | `Makefile` | `run-api`, `test`, `lint`, `check`, `up`, `down`, `infra-up`, `logs`, `hooks` |
+| Linting | `.golangci.yml` | golangci-lint v2 (standard linters + bodyclose, errorlint, gosec, misspell, noctx, unconvert; gofmt/goimports), run in Docker with a pinned version |
+| CI | `.github/workflows/ci.yml` | On every push/PR: golangci-lint, `go vet`, `go test -race` |
 | Commit rules | `.githooks/commit-msg`, `.github/workflows/commit-messages.yml` | Conventional Commits, checked locally and in CI |
 
 ## How it works
@@ -50,4 +52,3 @@ Database data lives in the `postgres-data` volume and survives `make down`.
 ## Not done yet / decided later
 
 - No Docker health check for the API container (distroless has no shell or curl).
-- Linting and a CI job for vet, lint and tests (step 2.5).
