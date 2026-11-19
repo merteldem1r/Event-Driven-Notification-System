@@ -20,6 +20,7 @@
 | D8 | Retry numbers: attempts, delays, lease time | Phase 8 (retries) | Later |
 | D9 | Default provider in docker-compose: mock vs webhook.site | Phase 2/6 | Later |
 | D10 | Loading a local `.env.local` for development | Phase 2 | Decided: godotenv |
+| D11 | API error format, create response, unknown JSON fields | Phase 4 (create API) | Decided: own envelope, full notification, reject |
 
 **Why only D1–D3 now?** They decide *what the database schema looks like, how workers are
 written, and what runs in docker-compose*. Changing them later means rewriting a lot.
@@ -264,3 +265,4 @@ a well-formed but non-existent number passes validation. Segment counting can be
 | D3 | Tooling | **chi, pgx v5 + hand-written SQL, golang-migrate, log/slog, prometheus/client_golang, env-var config, testing + testcontainers-go, hand-written OpenAPI, cmd/api + cmd/worker** | Standard, small, explainable Go choices | — | 2026-11-19 |
 | D4 | Validation rules | **Per-channel character caps** (SMS 1,600, push 500, email 100,000); E.164 / `net/mail` / token-shape recipient checks; priority defaults to `normal`; all field errors returned at once | Simple, standard library only, matches real provider limits; one response lists every problem (useful for batches) | Segment and cost counting; checking that recipients really exist | 2026-11-20 |
 | D10 | Local `.env.local` loading | **godotenv**, via `config.LoadDotEnv` at startup; missing file ignored; never overrides existing variables | Works with `make run-api`, plain `go run` and the IDE debugger; real environment wins over the file; no effect in Docker/production (file not in the image) | One small dependency; one local-only line in startup code (alternative was loading it in the Makefile) | 2026-11-19 |
+| D11 | API conventions | **Own error envelope** `{"error": {code, message, details}}` for every error; **202 returns the full notification** plus a `Location` header; **unknown JSON fields are rejected** with 400 | One simple, readable error shape with stable codes; create and get share one response shape; typos surface immediately | The RFC 9457 Problem Details standard; tolerance for clients that send extra fields | 2026-11-20 |

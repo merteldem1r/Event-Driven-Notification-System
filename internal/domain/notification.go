@@ -37,6 +37,22 @@ const (
 	PriorityLow    Priority = 3
 )
 
+// priorityNames are the names clients use in the API.
+var priorityNames = map[Priority]string{PriorityHigh: "high", PriorityNormal: "normal", PriorityLow: "low"}
+
+// String returns the API name of the priority, e.g. "high", or "" if it is unknown.
+func (p Priority) String() string { return priorityNames[p] }
+
+// ParsePriority returns the priority with the given API name, or 0 (invalid) if there is none.
+func ParsePriority(name string) Priority {
+	for p, n := range priorityNames {
+		if n == name {
+			return p
+		}
+	}
+	return 0
+}
+
 // Status is where a notification is in its lifecycle.
 type Status string
 

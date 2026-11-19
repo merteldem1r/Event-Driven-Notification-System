@@ -33,7 +33,7 @@ func TestHealth(t *testing.T) {
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/health", nil)
 			rec := httptest.NewRecorder()
 
-			NewRouter(slog.New(slog.DiscardHandler), tt.db).ServeHTTP(rec, req)
+			NewRouter(slog.New(slog.DiscardHandler), tt.db, nil).ServeHTTP(rec, req)
 
 			if rec.Code != tt.wantStatus {
 				t.Errorf("status = %d, want %d", rec.Code, tt.wantStatus)

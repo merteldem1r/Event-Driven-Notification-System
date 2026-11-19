@@ -39,7 +39,7 @@ func TestRequestLogger_LogsEveryRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			router := NewRouter(newBufferLogger(&buf), fakePinger{})
+			router := NewRouter(newBufferLogger(&buf), fakePinger{}, nil)
 
 			req := httptest.NewRequestWithContext(t.Context(), tt.method, tt.path, nil)
 			router.ServeHTTP(httptest.NewRecorder(), req)

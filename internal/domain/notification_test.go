@@ -97,3 +97,25 @@ func TestValidationErrorMessage(t *testing.T) {
 		t.Errorf("Error() = %q, want %q", got, want)
 	}
 }
+
+func TestPriorityNames(t *testing.T) {
+	tests := []struct {
+		name string
+		p    Priority
+	}{
+		{"high", PriorityHigh},
+		{"normal", PriorityNormal},
+		{"low", PriorityLow},
+	}
+	for _, tt := range tests {
+		if got := ParsePriority(tt.name); got != tt.p {
+			t.Errorf("ParsePriority(%q) = %d, want %d", tt.name, got, tt.p)
+		}
+		if got := tt.p.String(); got != tt.name {
+			t.Errorf("Priority(%d).String() = %q, want %q", tt.p, got, tt.name)
+		}
+	}
+	if got := ParsePriority("urgent"); got != 0 {
+		t.Errorf(`ParsePriority("urgent") = %d, want 0`, got)
+	}
+}

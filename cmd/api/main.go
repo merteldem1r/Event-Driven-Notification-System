@@ -14,6 +14,8 @@ import (
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/config"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/database"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/handler"
+	"github.com/merteldem1r/Event-Driven-Notification-System/internal/repository"
+	"github.com/merteldem1r/Event-Driven-Notification-System/internal/service"
 )
 
 func main() {
@@ -48,9 +50,12 @@ func run() error {
 	defer db.Close() // runs last, after the server has shut down
 	slog.Info("connected to database")
 
+	// Wire the layers: repository -> service -> HTTP handlers.
+	notifications := service.NewNotifications(repository.NewNotifications(db))
+
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.HTTPPort),
-		Handler: handler.NewRouter(logger, db),
+		Handler: handler.NewRouter(logger, db, notifications),
 		// Protect against slow or stuck clients.
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,

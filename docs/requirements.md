@@ -14,7 +14,7 @@ Status values: **Done**, **Partial**, **Todo**.
 
 | ID | Requirement | Status | Phase | Notes |
 |---|---|---|---|---|
-| API-1 | Create a notification with recipient, channel, content and priority | Todo | 4 | `POST /api/v1/notifications` → `202` |
+| API-1 | Create a notification with recipient, channel, content and priority | Done | 4 | `POST /api/v1/notifications` → `202` with the stored notification; priority optional (default `normal`) |
 | API-2 | Batch creation, up to 1000 notifications per request | Todo | 5 | Shared batch ID; all-or-nothing vs partial is decision D5 |
 | API-3 | Query notification status by ID | Todo | 4 | |
 | API-4 | Query status by batch ID | Todo | 5 | Summary counts per status |
@@ -29,7 +29,7 @@ Status values: **Done**, **Partial**, **Todo**.
 | PROC-1 | Process notifications asynchronously via queue workers | Todo | 6 | PostgreSQL queue, `FOR UPDATE SKIP LOCKED` |
 | PROC-2 | Rate limiting: max 100 messages/second **per channel** | Todo | 7 | Shared across all workers (Redis) |
 | PROC-3 | Priority queue support (high, normal, low) | Todo | 6 | Strict vs weighted is decision D7 |
-| PROC-4 | Content validation (character limits, required fields) | Partial | 4 | Rules done in `domain` (D4: SMS 1,600, push 500, email 100,000 characters; recipient format per channel); enforced by the API in 4.2 |
+| PROC-4 | Content validation (character limits, required fields) | Done | 4 | D4: SMS 1,600, push 500, email 100,000 characters; recipient format per channel; all field errors returned as `400 validation_failed` |
 | PROC-5 | Idempotency support to prevent duplicate sends | Todo | 4, 8 | API level: `Idempotency-Key`; worker level: lease + dedup key |
 
 ## 3. Delivery & Retry Logic (our own design)
