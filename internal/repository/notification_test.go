@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
@@ -159,5 +161,89 @@ func TestCreateRejectsInvalidValues(t *testing.T) {
 				t.Errorf("err = %v, want a CHECK constraint violation", err)
 			}
 		})
+	}
+}
+
+func TestCreate_IdempotencyKey(t *testing.T) {
+	repo := NewNotifications(testDB)
+	n := domain.Notification{
+		IdempotencyKey: ptr("key-" + uuid.NewString()),
+		Channel:        domain.ChannelSMS, Recipient: "+905551234567", Content: "hello", Priority: domain.PriorityNormal,
+	}
+
+	first, err := repo.Create(t.Context(), n)
+	if err != nil {
+		t.Fatalf("first Create: %v", err)
+	}
+	if _, err := repo.Create(t.Context(), n); !errors.Is(err, domain.ErrIdempotencyKeyExists) {
+		t.Fatalf("second Create err = %v, want domain.ErrIdempotencyKeyExists", err)
+	}
+
+	got, err := repo.GetByIdempotencyKey(t.Context(), *n.IdempotencyKey)
+	if err != nil {
+		t.Fatalf("GetByIdempotencyKey: %v", err)
+	}
+	if !reflect.DeepEqual(got, first) {
+		t.Errorf("GetByIdempotencyKey returned\n %+v\nwant\n %+v", got, first)
+	}
+}
+
+// Rows without a key never conflict: PostgreSQL doesn't treat NULLs as equal in a UNIQUE column.
+func TestCreate_WithoutKeyNeverConflicts(t *testing.T) {
+	repo := NewNotifications(testDB)
+	n := domain.Notification{
+		Channel: domain.ChannelSMS, Recipient: "+905551234567", Content: "hello", Priority: domain.PriorityNormal,
+	}
+	for i := range 2 {
+		if _, err := repo.Create(t.Context(), n); err != nil {
+			t.Fatalf("Create #%d: %v", i+1, err)
+		}
+	}
+}
+
+func TestGetByIdempotencyKeyNotFound(t *testing.T) {
+	_, err := NewNotifications(testDB).GetByIdempotencyKey(t.Context(), "missing-"+uuid.NewString())
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("err = %v, want domain.ErrNotFound", err)
+	}
+}
+
+// Many requests with the same key at the same moment: exactly one row is inserted.
+func TestCreate_ConcurrentSameKey(t *testing.T) {
+	repo := NewNotifications(testDB)
+	key := "key-" + uuid.NewString()
+	n := domain.Notification{
+		IdempotencyKey: &key,
+		Channel:        domain.ChannelSMS, Recipient: "+905551234567", Content: "hello", Priority: domain.PriorityNormal,
+	}
+
+	const requests = 20
+	var inserted, conflicts atomic.Int32
+	var wg sync.WaitGroup
+	for range requests {
+		wg.Go(func() {
+			_, err := repo.Create(t.Context(), n)
+			switch {
+			case err == nil:
+				inserted.Add(1)
+			case errors.Is(err, domain.ErrIdempotencyKeyExists):
+				conflicts.Add(1)
+			default:
+				t.Errorf("Create: %v", err)
+			}
+		})
+	}
+	wg.Wait()
+
+	if inserted.Load() != 1 || conflicts.Load() != requests-1 {
+		t.Errorf("inserted = %d, conflicts = %d; want 1 and %d", inserted.Load(), conflicts.Load(), requests-1)
+	}
+	var rows int
+	if err := testDB.QueryRow(t.Context(),
+		`SELECT count(*) FROM notifications WHERE idempotency_key = $1`, key).Scan(&rows); err != nil {
+		t.Fatalf("count rows: %v", err)
+	}
+	if rows != 1 {
+		t.Errorf("rows with the key = %d, want 1", rows)
 	}
 }

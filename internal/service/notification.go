@@ -3,6 +3,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -14,6 +15,7 @@ import (
 type NotificationStore interface {
 	Create(ctx context.Context, n domain.Notification) (domain.Notification, error)
 	GetByID(ctx context.Context, id uuid.UUID) (domain.Notification, error)
+	GetByIdempotencyKey(ctx context.Context, key string) (domain.Notification, error)
 }
 
 // Notifications implements the notification use cases.
@@ -27,17 +29,36 @@ func NewNotifications(store NotificationStore) *Notifications {
 }
 
 // Create validates n and saves it. Saving also queues it for sending.
-// Invalid input returns a *domain.ValidationError.
-func (s *Notifications) Create(ctx context.Context, n domain.Notification) (domain.Notification, error) {
+// If n's idempotency key was used before for the same request, it returns the stored
+// notification with replayed = true instead of saving a duplicate.
+// Invalid input returns a *domain.ValidationError; a key reused for a different request
+// returns domain.ErrIdempotencyKeyReused.
+func (s *Notifications) Create(ctx context.Context, n domain.Notification) (_ domain.Notification, replayed bool, _ error) {
 	if err := n.Validate(); err != nil {
-		return domain.Notification{}, err
+		return domain.Notification{}, false, err
 	}
 
 	created, err := s.store.Create(ctx, n)
-	if err != nil {
-		return domain.Notification{}, fmt.Errorf("create notification: %w", err)
+	if errors.Is(err, domain.ErrIdempotencyKeyExists) {
+		return s.replay(ctx, n)
 	}
-	return created, nil
+	if err != nil {
+		return domain.Notification{}, false, fmt.Errorf("create notification: %w", err)
+	}
+	return created, false, nil
+}
+
+// replay returns the notification already stored under n's idempotency key,
+// if it was created by the same request.
+func (s *Notifications) replay(ctx context.Context, n domain.Notification) (domain.Notification, bool, error) {
+	existing, err := s.store.GetByIdempotencyKey(ctx, *n.IdempotencyKey)
+	if err != nil {
+		return domain.Notification{}, false, fmt.Errorf("load notification for idempotency key: %w", err)
+	}
+	if !existing.SameRequest(n) {
+		return domain.Notification{}, false, domain.ErrIdempotencyKeyReused
+	}
+	return existing, true, nil
 }
 
 // Get returns the notification with the given ID, or an error wrapping domain.ErrNotFound.

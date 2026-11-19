@@ -14,9 +14,15 @@ import (
 
 // NotificationService is what the notification handlers need from the service layer.
 type NotificationService interface {
-	Create(ctx context.Context, n domain.Notification) (domain.Notification, error)
+	Create(ctx context.Context, n domain.Notification) (_ domain.Notification, replayed bool, _ error)
 	Get(ctx context.Context, id uuid.UUID) (domain.Notification, error)
 }
+
+// Idempotency headers (D12), as in the IETF draft and common APIs.
+const (
+	headerIdempotencyKey     = "Idempotency-Key"
+	headerIdempotentReplayed = "Idempotent-Replayed"
+)
 
 type createNotificationRequest struct {
 	Channel   string `json:"channel"`
@@ -72,21 +78,33 @@ func CreateNotification(svc NotificationService, logger *slog.Logger) http.Handl
 			priority = domain.ParsePriority(req.Priority)
 		}
 
-		created, err := svc.Create(r.Context(), domain.Notification{
+		n := domain.Notification{
 			Channel:   domain.Channel(req.Channel),
 			Recipient: req.Recipient,
 			Content:   req.Content,
 			Priority:  priority,
-		})
+		}
+		// Optional. Values (not Get) tells "header missing" apart from "header sent empty".
+		if keys := r.Header.Values(headerIdempotencyKey); len(keys) > 0 {
+			n.IdempotencyKey = &keys[0]
+		}
+
+		created, replayed, err := svc.Create(r.Context(), n)
 		if err != nil {
 			writeServiceError(w, r, logger, err)
 			return
 		}
 
 		// No recipient or content in logs: they are personal data.
-		logger.InfoContext(r.Context(), "notification created",
+		msg := "notification created"
+		if replayed {
+			msg = "idempotent request replayed"
+			w.Header().Set(headerIdempotentReplayed, "true")
+		}
+		logger.InfoContext(r.Context(), msg,
 			"notification_id", created.ID, "channel", created.Channel, "priority", created.Priority.String())
 
+		// A retry gets exactly what the first attempt got.
 		w.Header().Set("Location", "/api/v1/notifications/"+created.ID.String())
 		writeJSON(w, http.StatusAccepted, toNotificationResponse(created))
 	}

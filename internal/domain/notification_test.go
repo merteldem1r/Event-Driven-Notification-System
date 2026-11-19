@@ -53,6 +53,18 @@ func TestValidate(t *testing.T) {
 		{"missing priority", func(n *Notification) { n.Priority = 0 }, []string{"priority"}},
 		{"unknown priority", func(n *Notification) { n.Priority = 9 }, []string{"priority"}},
 
+		// Idempotency key (optional; nil means no header).
+		{"valid idempotency key", func(n *Notification) { n.IdempotencyKey = ptr("order-1042_confirm:v1") }, nil},
+		{"key at max length", func(n *Notification) {
+			n.IdempotencyKey = ptr(strings.Repeat("k", MaxIdempotencyKeyLength))
+		}, nil},
+		{"empty key", func(n *Notification) { n.IdempotencyKey = ptr("") }, []string{"Idempotency-Key"}},
+		{"key too long", func(n *Notification) {
+			n.IdempotencyKey = ptr(strings.Repeat("k", MaxIdempotencyKeyLength+1))
+		}, []string{"Idempotency-Key"}},
+		{"key with space", func(n *Notification) { n.IdempotencyKey = ptr("order 1042") }, []string{"Idempotency-Key"}},
+		{"key with non-ASCII", func(n *Notification) { n.IdempotencyKey = ptr("sipariş-1042") }, []string{"Idempotency-Key"}},
+
 		// All problems are reported together.
 		{"several errors at once", func(n *Notification) {
 			n.Recipient, n.Content, n.Priority = "", "", 0
@@ -117,5 +129,33 @@ func TestPriorityNames(t *testing.T) {
 	}
 	if got := ParsePriority("urgent"); got != 0 {
 		t.Errorf(`ParsePriority("urgent") = %d, want 0`, got)
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
+
+func TestSameRequest(t *testing.T) {
+	base := Notification{Channel: ChannelSMS, Recipient: "+905551234567", Content: "hello", Priority: PriorityNormal}
+
+	tests := []struct {
+		name   string
+		change func(n *Notification)
+		want   bool
+	}{
+		{"identical", func(n *Notification) {}, true},
+		{"server-set fields are ignored", func(n *Notification) { n.Status, n.Attempts = StatusSent, 3 }, true},
+		{"different channel", func(n *Notification) { n.Channel = ChannelPush }, false},
+		{"different recipient", func(n *Notification) { n.Recipient = "+905559999999" }, false},
+		{"different content", func(n *Notification) { n.Content = "goodbye" }, false},
+		{"different priority", func(n *Notification) { n.Priority = PriorityHigh }, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			other := base
+			tt.change(&other)
+			if got := base.SameRequest(other); got != tt.want {
+				t.Errorf("SameRequest = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

@@ -14,8 +14,15 @@ import (
 	"github.com/google/uuid"
 )
 
-// ErrNotFound means the requested item doesn't exist.
-var ErrNotFound = errors.New("not found")
+// Errors callers can check with errors.Is.
+var (
+	// ErrNotFound means the requested item doesn't exist.
+	ErrNotFound = errors.New("not found")
+	// ErrIdempotencyKeyExists means a notification with this idempotency key is already stored.
+	ErrIdempotencyKeyExists = errors.New("idempotency key already exists")
+	// ErrIdempotencyKeyReused means the key was already used for a different request.
+	ErrIdempotencyKeyReused = errors.New("idempotency key already used for a different request")
+)
 
 // Channel is how a notification is delivered.
 type Channel string
@@ -94,6 +101,8 @@ const (
 	MaxPushLength      = 500     // stays well under the ~4 KB push payload limit
 	MaxEmailLength     = 100_000 // safety cap; email itself has no real limit
 	MaxPushTokenLength = 512
+
+	MaxIdempotencyKeyLength = 255 // D12
 )
 
 // contentLimits is the maximum content length per channel.
@@ -156,6 +165,11 @@ func (n Notification) Validate() error {
 		add("priority", "must be high, normal or low")
 	}
 
+	// The key comes from a header, so the field is named after it.
+	if n.IdempotencyKey != nil && !validIdempotencyKey(*n.IdempotencyKey) {
+		add("Idempotency-Key", fmt.Sprintf("must be 1 to %d visible ASCII characters", MaxIdempotencyKeyLength))
+	}
+
 	if len(errs) > 0 {
 		return &ValidationError{Fields: errs}
 	}
@@ -180,4 +194,26 @@ func checkRecipient(c Channel, recipient string) string {
 		}
 	}
 	return ""
+}
+
+// validIdempotencyKey reports whether key is 1 to 255 visible ASCII characters (no spaces).
+func validIdempotencyKey(key string) bool {
+	if len(key) == 0 || len(key) > MaxIdempotencyKeyLength {
+		return false
+	}
+	for i := 0; i < len(key); i++ {
+		if key[i] < '!' || key[i] > '~' {
+			return false
+		}
+	}
+	return true
+}
+
+// SameRequest reports whether n and other ask for the same message.
+// It decides if a repeated idempotency key is a retry (same) or a reused key (different).
+func (n Notification) SameRequest(other Notification) bool {
+	return n.Channel == other.Channel &&
+		n.Recipient == other.Recipient &&
+		n.Content == other.Content &&
+		n.Priority == other.Priority
 }

@@ -21,6 +21,7 @@
 | D9 | Default provider in docker-compose: mock vs webhook.site | Phase 2/6 | Later |
 | D10 | Loading a local `.env.local` for development | Phase 2 | Decided: godotenv |
 | D11 | API error format, create response, unknown JSON fields | Phase 4 (create API) | Decided: own envelope, full notification, reject |
+| D12 | Idempotency key behavior | Phase 4 (create API) | Decided: see D12 below |
 
 **Why only D1–D3 now?** They decide *what the database schema looks like, how workers are
 written, and what runs in docker-compose*. Changing them later means rewriting a lot.
@@ -234,6 +235,30 @@ a well-formed but non-existent number passes validation. Segment counting can be
 
 ---
 
+## D12 — Idempotency key
+
+Decided in Phase 4. **Problem:** a client can't tell a lost request from a lost response, so it
+retries, and a retry of `POST` creates a duplicate notification. **Idea:** the client names each
+logical action with an `Idempotency-Key` header and reuses it on every retry; the server stores it
+and never creates a second notification for the same key.
+
+| Question | Options | Chosen |
+|---|---|---|
+| Repeated key, same request | Return the original / `409 Conflict` | **Return the original:** same `202` and body, plus `Idempotent-Replayed: true` |
+| Repeated key, different request | Ignore and return the original / reject | **Reject with `422 idempotency_key_reused`**; "same" compares channel, recipient, content and priority (after the priority default) |
+| Key rules and lifetime | Used while the row exists / expires after 24 h | **Optional header, 1 to 255 visible ASCII characters; used while its notification exists** |
+
+**Concurrency.** "Check, then insert" races: two retries can both see "not found" and both insert.
+Instead the `UNIQUE` index decides in one step: `INSERT ... ON CONFLICT (idempotency_key) DO NOTHING
+RETURNING ...`. A returned row means this request won; no row means the key is taken, so the service
+reads the stored row (in a separate statement, so it sees the winner's committed row) and replays it.
+
+What we give up: keys can't be reused after a period of time; there are no per-client key scopes
+(the system has no client accounts). Duplicates between worker and provider are a separate problem,
+handled in Phase 8.
+
+---
+
 ## Resulting architecture
 
 ```
@@ -266,3 +291,4 @@ a well-formed but non-existent number passes validation. Segment counting can be
 | D4 | Validation rules | **Per-channel character caps** (SMS 1,600, push 500, email 100,000); E.164 / `net/mail` / token-shape recipient checks; priority defaults to `normal`; all field errors returned at once | Simple, standard library only, matches real provider limits; one response lists every problem (useful for batches) | Segment and cost counting; checking that recipients really exist | 2026-11-20 |
 | D10 | Local `.env.local` loading | **godotenv**, via `config.LoadDotEnv` at startup; missing file ignored; never overrides existing variables | Works with `make run-api`, plain `go run` and the IDE debugger; real environment wins over the file; no effect in Docker/production (file not in the image) | One small dependency; one local-only line in startup code (alternative was loading it in the Makefile) | 2026-11-19 |
 | D11 | API conventions | **Own error envelope** `{"error": {code, message, details}}` for every error; **202 returns the full notification** plus a `Location` header; **unknown JSON fields are rejected** with 400 | One simple, readable error shape with stable codes; create and get share one response shape; typos surface immediately | The RFC 9457 Problem Details standard; tolerance for clients that send extra fields | 2026-11-20 |
+| D12 | Idempotency key | **Optional `Idempotency-Key` header** (1 to 255 visible ASCII); repeat with the same request → original `202` + `Idempotent-Replayed: true`; repeat with a different request → `422 idempotency_key_reused`; key used while its row exists; `INSERT ... ON CONFLICT DO NOTHING` | Retries become safe for clients; key reuse bugs surface; the unique index makes it race-free across API instances | Key expiry and per-client scopes | 2026-11-20 |

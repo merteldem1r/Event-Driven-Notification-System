@@ -30,7 +30,7 @@ Status values: **Done**, **Partial**, **Todo**.
 | PROC-2 | Rate limiting: max 100 messages/second **per channel** | Todo | 7 | Shared across all workers (Redis) |
 | PROC-3 | Priority queue support (high, normal, low) | Todo | 6 | Strict vs weighted is decision D7 |
 | PROC-4 | Content validation (character limits, required fields) | Done | 4 | D4: SMS 1,600, push 500, email 100,000 characters; recipient format per channel; all field errors returned as `400 validation_failed` |
-| PROC-5 | Idempotency support to prevent duplicate sends | Todo | 4, 8 | API level: `Idempotency-Key`; worker level: lease + dedup key |
+| PROC-5 | Idempotency support to prevent duplicate sends | Partial | 4, 8 | API level done (D12: `Idempotency-Key` header, race-free via unique index); worker level (lease + dedup key) in Phase 8 |
 
 ## 3. Delivery & Retry Logic (our own design)
 

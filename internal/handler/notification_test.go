@@ -19,9 +19,10 @@ import (
 
 // fakeNotificationService records the notification it receives and returns err or a stored copy.
 type fakeNotificationService struct {
-	err   error
-	calls int
-	got   domain.Notification
+	err      error
+	replayed bool // what Create reports
+	calls    int
+	got      domain.Notification
 }
 
 var (
@@ -30,14 +31,14 @@ var (
 	fakeCreatedAt = time.Date(2026, 11, 20, 13, 0, 0, 0, time.FixedZone("TRT", 3*60*60))
 )
 
-func (f *fakeNotificationService) Create(_ context.Context, n domain.Notification) (domain.Notification, error) {
+func (f *fakeNotificationService) Create(_ context.Context, n domain.Notification) (domain.Notification, bool, error) {
 	f.calls++
 	f.got = n
 	if f.err != nil {
-		return domain.Notification{}, f.err
+		return domain.Notification{}, false, f.err
 	}
 	n.ID, n.Status, n.CreatedAt, n.UpdatedAt = fakeID, domain.StatusPending, fakeCreatedAt, fakeCreatedAt
-	return n, nil
+	return n, f.replayed, nil
 }
 
 // Get knows only fakeID, as a sent notification.
@@ -59,9 +60,13 @@ func (f *fakeNotificationService) Get(_ context.Context, id uuid.UUID) (domain.N
 func ptr[T any](v T) *T { return &v }
 
 // postNotification sends body to POST /api/v1/notifications through the full router.
-func postNotification(t *testing.T, svc NotificationService, body string) *httptest.ResponseRecorder {
+// headers are optional name/value pairs.
+func postNotification(t *testing.T, svc NotificationService, body string, headers ...string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/notifications", strings.NewReader(body))
+	for i := 0; i+1 < len(headers); i += 2 {
+		req.Header.Set(headers[i], headers[i+1])
+	}
 	rec := httptest.NewRecorder()
 	NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, svc).ServeHTTP(rec, req)
 	return rec
@@ -77,6 +82,9 @@ func TestCreateNotification_Accepted(t *testing.T) {
 	}
 	if loc := rec.Header().Get("Location"); loc != "/api/v1/notifications/"+fakeID.String() {
 		t.Errorf("Location = %q", loc)
+	}
+	if h := rec.Header().Get(headerIdempotentReplayed); h != "" {
+		t.Errorf("%s = %q on a first request, want no header", headerIdempotentReplayed, h)
 	}
 
 	want := domain.Notification{
@@ -151,6 +159,47 @@ func TestCreateNotification_ValidationError(t *testing.T) {
 	}
 }
 
+func TestCreateNotification_IdempotencyKey(t *testing.T) {
+	const body = `{"channel":"sms","recipient":"+905551234567","content":"hi"}`
+
+	tests := []struct {
+		name    string
+		headers []string
+		want    *string // key the service receives
+	}{
+		{"no header", nil, nil},
+		{"key is passed on", []string{"Idempotency-Key", "order-1042"}, ptr("order-1042")},
+		{"empty header is kept for validation", []string{"Idempotency-Key", ""}, ptr("")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &fakeNotificationService{}
+			postNotification(t, svc, body, tt.headers...)
+
+			got := svc.got.IdempotencyKey
+			if (got == nil) != (tt.want == nil) || (got != nil && *got != *tt.want) {
+				t.Errorf("service got key %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCreateNotification_Replayed(t *testing.T) {
+	svc := &fakeNotificationService{replayed: true}
+	rec := postNotification(t, svc, `{"channel":"sms","recipient":"+905551234567","content":"hi"}`,
+		"Idempotency-Key", "order-1042")
+
+	if rec.Code != http.StatusAccepted {
+		t.Errorf("status = %d, want 202 (same as the first attempt)", rec.Code)
+	}
+	if h := rec.Header().Get(headerIdempotentReplayed); h != "true" {
+		t.Errorf("%s = %q, want \"true\"", headerIdempotentReplayed, h)
+	}
+	if loc := rec.Header().Get("Location"); loc != "/api/v1/notifications/"+fakeID.String() {
+		t.Errorf("Location = %q", loc)
+	}
+}
+
 func TestCreateNotification_Errors(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -168,6 +217,8 @@ func TestCreateNotification_Errors(t *testing.T) {
 		{"two objects", `{}{}`, nil, http.StatusBadRequest, codeInvalidBody, "request body must contain a single JSON object"},
 		{"too large", `{"content":"` + strings.Repeat("a", maxBodyBytes) + `"}`, nil,
 			http.StatusRequestEntityTooLarge, codeBodyTooLarge, "request body must be at most 1048576 bytes"},
+		{"idempotency key reused", `{"channel":"sms"}`, domain.ErrIdempotencyKeyReused,
+			http.StatusUnprocessableEntity, codeKeyReused, "this Idempotency-Key was already used"},
 		{"service failure is hidden", `{"channel":"sms"}`, errors.New("connection refused"),
 			http.StatusInternalServerError, codeInternal, "something went wrong"},
 	}
