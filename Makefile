@@ -12,7 +12,7 @@ hooks:
 run-api:
 	go run ./cmd/api
 
-## test: run all tests with the race detector
+## test: run all tests with the race detector (repository tests need Docker running)
 test:
 	go test -race ./...
 

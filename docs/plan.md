@@ -9,7 +9,7 @@ is tested. Then we stop, explain it, and the user commits it.
 
 Status: `[x]` done, `[ ]` not done. The next step is marked **(next)**.
 
-> **Current position:** Phase 3, step **3.3** (repository: insert + get by ID, integration tests with testcontainers).
+> **Current position:** Phase 4, step **4.1** (validation rules for notifications, decide D4).
 
 ---
 
@@ -31,16 +31,17 @@ Goal: a running service in Docker with the basic tooling around it.
 **Verify:** `docker compose up` starts everything; `GET /health` → 200; CI green.
 **Summary:** `docs/application/03-project-skeleton.md`.
 
-## Phase 3 · Database
+## Phase 3 · Database (done)
 Goal: the schema exists and Go code can read/write it, tested against a real Postgres.
 - [x] 3.1 pgx connection pool, `DATABASE_URL` config (required), API fails fast without a database, `/health` checks the DB (200/503)
 - [x] 3.2 golang-migrate as a one-off compose service (API waits for it); first migration: `notifications` table with queue columns, constraints and indexes; `make migrate-up` / `migrate-down`
-- [ ] 3.3 Repository: insert + get by ID; integration tests with testcontainers **(next)**
+- [x] 3.3 Domain `Notification` type (channel, priority, status); repository: insert + get by ID; integration tests against a real PostgreSQL with testcontainers
 
 **Verify:** migrations run on `docker compose up`; repository tests pass against a real database.
+**Summary:** `docs/application/04-database.md`.
 
 ## Phase 4 · API: create and get one notification
-- [ ] 4.1 Domain types (Channel, Priority, Status) + validation rules (decide D4)
+- [ ] 4.1 Validation rules for notifications: required fields, allowed values, content limits (decide D4) **(next)**
 - [ ] 4.2 Standard JSON error format + `POST /api/v1/notifications` → `202` (API-1, PROC-4)
 - [ ] 4.3 `GET /api/v1/notifications/{id}` (API-3)
 - [ ] 4.4 Idempotency key (PROC-5, API level)

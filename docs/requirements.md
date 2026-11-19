@@ -80,7 +80,7 @@ Status values: **Done**, **Partial**, **Todo**.
 | DEL-3 | Docker Compose: one-command setup (`docker compose up`) | Partial | 2 | Dockerfile + compose with api, PostgreSQL, Redis (done); worker and migrations join in later phases |
 | DEL-4 | API documentation: Swagger/OpenAPI specification | Todo | 4–15 | Grows with each endpoint |
 | DEL-5 | Database migrations: versioned schema changes | Done | 3 | golang-migrate, numbered up/down SQL files, applied automatically by Compose; new migrations added as features need them |
-| DEL-6 | Test suite runnable with a single command | Partial | all | `make test` (race detector) and `make check` (done); grows with each step |
+| DEL-6 | Test suite runnable with a single command | Partial | all | `make test` (race detector) and `make check` (done); repository tests use testcontainers and need Docker; grows with each step |
 
 ## 8. Implied requirements (not written, but expected)
 
@@ -88,7 +88,7 @@ Status values: **Done**, **Partial**, **Todo**.
 |---|---|---|---|---|
 | IMP-1 | The rate limit holds across **all** worker processes, not per worker | Todo | 7 | |
 | IMP-2 | Two workers never claim the same notification | Todo | 6 | |
-| IMP-3 | Saving and enqueuing are atomic (no dual-write problem) | Todo | 3, 4 | Same table, same transaction |
+| IMP-3 | Saving and enqueuing are atomic (no dual-write problem) | Partial | 3, 5 | One table: inserting a row is enqueuing it (done); batch insert in one transaction in Phase 5 |
 | IMP-4 | Cancel and worker claim can't both win (no race) | Todo | 5 | Conditional `UPDATE` |
 | IMP-5 | Graceful shutdown of API and workers (finish in-flight work on SIGTERM) | Partial | 2, 8 | API (done); worker pending |
 | IMP-6 | Low-priority messages are not starved forever | Todo | 6 | Depends on D7 |
