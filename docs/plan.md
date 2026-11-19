@@ -9,7 +9,7 @@ is tested. Then we stop, explain it, and the user commits it.
 
 Status: `[x]` done, `[ ]` not done. The next step is marked **(next)**.
 
-> **Current position:** Phase 5, step **5.6** (cancel a whole batch).
+> **Current position:** Phase 6, step **6.1** (worker skeleton with graceful shutdown).
 
 ---
 
@@ -52,16 +52,19 @@ Goal: the schema exists and Go code can read/write it, tested against a real Pos
 **Verify:** create via Postman → 202; get → `pending`; same idempotency key → same notification; invalid input → 400.
 **Summary:** `docs/application/05-api-create-and-get.md`.
 
-## Phase 5 · API: batch, list, cancel
+## Phase 5 · API: batch, list, cancel (done)
 - [x] 5.1 Batch create (D5): `POST /api/v1/notifications/batch`, 1 to 1,000 items, all-or-nothing validation with positional errors, one `unnest` insert statement, `202 {batch_id, count, ids}` (API-2, IMP-8)
 - [x] 5.2 Batch idempotency: `Idempotency-Key` on batches, item keys `<key>#<i>`, insert in a transaction rolled back if any key is taken; replay only for the same items and count (PROC-5)
 - [x] 5.3 `GET /api/v1/batches/{id}`: total and a count per status (zeros included), one `GROUP BY` on the batch index; unknown → `404`, malformed → `400` (API-4)
 - [x] 5.4 `GET /api/v1/notifications`: filters `status`, `channel`, `batch_id`, `from`/`to`; cursor pagination (D6) on a new `(created_at, id)` index (API-6, API-7)
 - [x] 5.5 `POST /api/v1/notifications/{id}/cancel` with one conditional `UPDATE`; too late → `409`, repeat → `200` (D14) (API-5, IMP-4)
-- [ ] 5.6 `POST /api/v1/batches/{id}/cancel`: cancel every item still pending, return counts (API-5) **(next)**
+- [x] 5.6 `POST /api/v1/batches/{id}/cancel`: one conditional `UPDATE` on the batch; returns `cancelled` and the counts afterwards; nothing left → `200` with `0` (API-5)
+
+**Verify:** batch of 1,000 → `202`; batch status counts; list pages with filters; cancel → `cancelled`, too late → `409`.
+**Summary:** `docs/application/06-api-batch-list-cancel.md`.
 
 ## Phase 6 · Worker: the end-to-end flow
-- [ ] 6.1 `cmd/worker` skeleton with graceful shutdown
+- [ ] 6.1 `cmd/worker` skeleton with graceful shutdown **(next)**
 - [ ] 6.2 Claim query with `SKIP LOCKED` + priority (decide D7) (PROC-1, PROC-3, IMP-2)
 - [ ] 6.3 Provider interface, webhook.site client, local mock provider (decide D9) (PRV-1..3)
 - [ ] 6.4 Send + record result (`sent`, provider `messageId`) (RET-6)

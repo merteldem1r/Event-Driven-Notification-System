@@ -179,6 +179,19 @@ func (r *Notifications) CancelPending(ctx context.Context, id uuid.UUID) (_ doma
 	return n, true, nil
 }
 
+// CancelPendingInBatch cancels every notification of the batch that is still pending and
+// returns how many it cancelled. Like CancelPending, each row is checked and changed in
+// one step, so a worker claim on any of them can't also win.
+func (r *Notifications) CancelPendingInBatch(ctx context.Context, batchID uuid.UUID) (int, error) {
+	tag, err := r.db.Exec(ctx, `
+		UPDATE notifications SET status = 'cancelled', updated_at = now()
+		WHERE batch_id = $1 AND status = 'pending'`, batchID)
+	if err != nil {
+		return 0, fmt.Errorf("cancel batch %s: %w", batchID, err)
+	}
+	return int(tag.RowsAffected()), nil
+}
+
 // List returns one page of notifications matching f, newest first (D6: cursor pagination).
 func (r *Notifications) List(ctx context.Context, f domain.ListFilter) (domain.Page, error) {
 	var afterTime *time.Time

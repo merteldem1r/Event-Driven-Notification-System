@@ -21,6 +21,7 @@ type NotificationService interface {
 	GetBatch(ctx context.Context, batchID uuid.UUID) (domain.BatchSummary, error)
 	List(ctx context.Context, f domain.ListFilter) (domain.Page, error)
 	Cancel(ctx context.Context, id uuid.UUID) (domain.Notification, error)
+	CancelBatch(ctx context.Context, batchID uuid.UUID) (domain.BatchCancellation, error)
 }
 
 // Idempotency headers (D12), as in the IETF draft and common APIs.
@@ -67,6 +68,12 @@ type batchStatusResponse struct {
 	Total     int          `json:"total"`
 	Counts    statusCounts `json:"counts"`
 	CreatedAt time.Time    `json:"created_at"`
+}
+
+// batchCancelResponse is the batch status after a cancel, plus how many this request cancelled.
+type batchCancelResponse struct {
+	batchStatusResponse
+	Cancelled int `json:"cancelled"`
 }
 
 // statusCounts has a field per status, so every count is always present.
@@ -264,18 +271,45 @@ func GetBatch(svc NotificationService, logger *slog.Logger) http.HandlerFunc {
 			return
 		}
 
-		c := summary.Counts
-		writeJSON(w, http.StatusOK, batchStatusResponse{
-			BatchID: summary.ID,
-			Total:   summary.Total,
-			Counts: statusCounts{
-				Pending:    c[domain.StatusPending],
-				Processing: c[domain.StatusProcessing],
-				Sent:       c[domain.StatusSent],
-				Failed:     c[domain.StatusFailed],
-				Cancelled:  c[domain.StatusCancelled],
-			},
-			CreatedAt: summary.CreatedAt.UTC(),
+		writeJSON(w, http.StatusOK, toBatchStatusResponse(summary))
+	}
+}
+
+// CancelBatch handles POST /api/v1/batches/{id}/cancel: cancels every notification of the
+// batch that is still pending (D14).
+func CancelBatch(svc NotificationService, logger *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := idParam(w, r)
+		if !ok {
+			return
+		}
+
+		result, err := svc.CancelBatch(r.Context(), id)
+		if err != nil {
+			writeServiceError(w, r, logger, err)
+			return
+		}
+		logger.InfoContext(r.Context(), "batch cancelled", "batch_id", id, "cancelled", result.Cancelled)
+		writeJSON(w, http.StatusOK, batchCancelResponse{
+			batchStatusResponse: toBatchStatusResponse(result.Summary),
+			Cancelled:           result.Cancelled,
 		})
+	}
+}
+
+// toBatchStatusResponse maps a summary to its API shape.
+func toBatchStatusResponse(s domain.BatchSummary) batchStatusResponse {
+	c := s.Counts
+	return batchStatusResponse{
+		BatchID: s.ID,
+		Total:   s.Total,
+		Counts: statusCounts{
+			Pending:    c[domain.StatusPending],
+			Processing: c[domain.StatusProcessing],
+			Sent:       c[domain.StatusSent],
+			Failed:     c[domain.StatusFailed],
+			Cancelled:  c[domain.StatusCancelled],
+		},
+		CreatedAt: s.CreatedAt.UTC(),
 	}
 }

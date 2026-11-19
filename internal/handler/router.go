@@ -33,6 +33,7 @@ func NewRouter(logger *slog.Logger, db Pinger, notifications NotificationService
 		r.Get("/notifications/{id}", GetNotification(notifications, logger))
 		r.Post("/notifications/{id}/cancel", CancelNotification(notifications, logger))
 		r.Get("/batches/{id}", GetBatch(notifications, logger))
+		r.Post("/batches/{id}/cancel", CancelBatch(notifications, logger))
 	})
 
 	return r

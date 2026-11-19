@@ -649,3 +649,75 @@ func TestCancelPending_RacesWorkerClaim(t *testing.T) {
 		}
 	}
 }
+
+func TestCancelPendingInBatch(t *testing.T) {
+	repo := NewNotifications(testDB)
+	batchID := uuid.New()
+	now := time.Now()
+	for _, status := range []domain.Status{
+		domain.StatusPending, domain.StatusPending, domain.StatusPending, domain.StatusSent, domain.StatusProcessing,
+	} {
+		insertAt(t, batchID, now, status, domain.ChannelSMS)
+	}
+	other := insertAt(t, uuid.New(), now, domain.StatusPending, domain.ChannelSMS) // another batch
+
+	n, err := repo.CancelPendingInBatch(t.Context(), batchID)
+	if err != nil || n != 3 {
+		t.Fatalf("CancelPendingInBatch = %d, %v; want 3", n, err)
+	}
+	summary, _ := repo.BatchSummary(t.Context(), batchID)
+	if c := summary.Counts; c[domain.StatusCancelled] != 3 || c[domain.StatusSent] != 1 || c[domain.StatusProcessing] != 1 {
+		t.Errorf("counts after cancel = %v, want 3 cancelled, sent and processing untouched", c)
+	}
+	if got, _ := repo.GetByID(t.Context(), other); got.Status != domain.StatusPending {
+		t.Errorf("other batch's notification is %s, want pending", got.Status)
+	}
+
+	// Again: nothing pending is left.
+	if n, err := repo.CancelPendingInBatch(t.Context(), batchID); err != nil || n != 0 {
+		t.Errorf("second cancel = %d, %v; want 0", n, err)
+	}
+}
+
+// A batch cancel racing claims on each of its rows: every row ends up exactly one way.
+func TestCancelPendingInBatch_RacesWorkerClaims(t *testing.T) {
+	repo := NewNotifications(testDB)
+	const size = 100
+	batchID := uuid.New()
+	ids := make([]uuid.UUID, size)
+	for i := range ids {
+		ids[i] = insertAt(t, batchID, time.Now(), domain.StatusPending, domain.ChannelSMS)
+	}
+
+	var cancelled int
+	var claimed atomic.Int64
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		<-start
+		var err error
+		if cancelled, err = repo.CancelPendingInBatch(t.Context(), batchID); err != nil {
+			t.Errorf("cancel: %v", err)
+		}
+	})
+	for _, id := range ids {
+		wg.Go(func() {
+			<-start
+			tag, err := testDB.Exec(t.Context(),
+				`UPDATE notifications SET status = 'processing' WHERE id = $1 AND status = 'pending'`, id)
+			if err != nil {
+				t.Errorf("claim: %v", err)
+			}
+			claimed.Add(tag.RowsAffected())
+		})
+	}
+	close(start)
+	wg.Wait()
+
+	summary, _ := repo.BatchSummary(t.Context(), batchID)
+	c := summary.Counts
+	if cancelled+int(claimed.Load()) != size || c[domain.StatusCancelled] != cancelled || c[domain.StatusProcessing] != int(claimed.Load()) {
+		t.Errorf("cancelled %d, claimed %d, counts %v; want them to add up to %d with no overlap",
+			cancelled, claimed.Load(), c, size)
+	}
+}

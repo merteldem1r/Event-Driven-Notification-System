@@ -470,6 +470,66 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /api/v1/batches/{id}/cancel:
+    post:
+      tags: [notifications]
+      operationId: cancelBatch
+      summary: Cancel every notification of a batch that hasn't been sent
+      description: |
+        Cancels the batch's notifications that are still `pending`; the others are left as they
+        are. Each one is checked and changed atomically, so a worker can't send it afterwards.
+        Returns how many this request cancelled, and the batch's counts afterwards. Nothing left
+        to cancel is not an error (`cancelled: 0`), so retries are safe.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The `batch_id` from the batch create response.
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/CorrelationID"
+      responses:
+        "200":
+          description: Cancelled whatever was still pending.
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchCancelled"
+        "400":
+          description: The ID is not a UUID (`invalid_id`).
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: invalid_id
+                  message: id must be a UUID
+        "404":
+          description: No batch has this ID (`not_found`).
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: not_found
+                  message: the requested item was not found
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /health:
     get:
       tags: [operations]
@@ -705,6 +765,24 @@ components:
         total: 1000
         counts: {pending: 412, processing: 8, sent: 571, failed: 9, cancelled: 0}
         created_at: "2026-11-20T10:00:00Z"
+
+    BatchCancelled:
+      description: The batch status after the cancel, plus how many this request cancelled.
+      allOf:
+        - $ref: "#/components/schemas/BatchStatus"
+        - type: object
+          required: [cancelled]
+          properties:
+            cancelled:
+              type: integer
+              minimum: 0
+              description: Notifications cancelled by this request; 0 if none were still pending.
+      example:
+        batch_id: 3f2c9a1e-7b4d-4c1a-9e8f-1a2b3c4d5e6f
+        total: 1000
+        counts: {pending: 0, processing: 8, sent: 571, failed: 9, cancelled: 412}
+        created_at: "2026-11-20T10:00:00Z"
+        cancelled: 412
 
     NotificationList:
       type: object

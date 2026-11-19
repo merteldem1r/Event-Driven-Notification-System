@@ -117,6 +117,20 @@ func (f *fakeStore) CancelPending(_ context.Context, id uuid.UUID) (domain.Notif
 	return domain.Notification{}, false, nil
 }
 
+func (f *fakeStore) CancelPendingInBatch(_ context.Context, batchID uuid.UUID) (int, error) {
+	if f.err != nil {
+		return 0, f.err
+	}
+	cancelled := 0
+	for i, n := range f.saved {
+		if n.BatchID != nil && *n.BatchID == batchID && n.Status == domain.StatusPending {
+			f.saved[i].Status = domain.StatusCancelled
+			cancelled++
+		}
+	}
+	return cancelled, nil
+}
+
 func validNotification() domain.Notification {
 	return domain.Notification{
 		Channel: domain.ChannelSMS, Recipient: "+905551234567", Content: "hello", Priority: domain.PriorityNormal,
@@ -422,4 +436,25 @@ func TestCancel(t *testing.T) {
 			t.Error("err = nil, want an error after every attempt missed")
 		}
 	})
+}
+
+func TestCancelBatch(t *testing.T) {
+	svc := NewNotifications(&fakeStore{})
+	batch, _, err := svc.CreateBatch(t.Context(), threeItems(), nil)
+	if err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+
+	got, err := svc.CancelBatch(t.Context(), batch.ID)
+	if err != nil || got.Cancelled != 3 || got.Summary.Counts[domain.StatusCancelled] != 3 {
+		t.Errorf("first cancel = %+v, %v; want 3 cancelled", got, err)
+	}
+	// Repeating is safe: nothing left, no error.
+	got, err = svc.CancelBatch(t.Context(), batch.ID)
+	if err != nil || got.Cancelled != 0 || got.Summary.Total != 3 {
+		t.Errorf("second cancel = %+v, %v; want 0 cancelled of 3", got, err)
+	}
+	if _, err := svc.CancelBatch(t.Context(), uuid.New()); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("unknown batch err = %v, want domain.ErrNotFound", err)
+	}
 }

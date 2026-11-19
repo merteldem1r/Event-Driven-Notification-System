@@ -21,6 +21,7 @@ type NotificationStore interface {
 	BatchSummary(ctx context.Context, batchID uuid.UUID) (domain.BatchSummary, error)
 	List(ctx context.Context, f domain.ListFilter) (domain.Page, error)
 	CancelPending(ctx context.Context, id uuid.UUID) (_ domain.Notification, ok bool, _ error)
+	CancelPendingInBatch(ctx context.Context, batchID uuid.UUID) (int, error)
 }
 
 // Notifications implements the notification use cases.
@@ -190,4 +191,20 @@ func (s *Notifications) Cancel(ctx context.Context, id uuid.UUID) (domain.Notifi
 		}
 	}
 	return domain.Notification{}, fmt.Errorf("cancel notification %s: still changing after %d attempts", id, cancelAttempts)
+}
+
+// CancelBatch cancels every notification of the batch that is still pending (D14) and
+// reports how many, with the batch's counts afterwards. Nothing left to cancel is not an
+// error, so retrying is safe. An unknown batch wraps domain.ErrNotFound.
+func (s *Notifications) CancelBatch(ctx context.Context, batchID uuid.UUID) (domain.BatchCancellation, error) {
+	cancelled, err := s.store.CancelPendingInBatch(ctx, batchID)
+	if err != nil {
+		return domain.BatchCancellation{}, fmt.Errorf("cancel batch: %w", err)
+	}
+	// Also tells an unknown batch (no rows) apart from one with nothing left to cancel.
+	summary, err := s.store.BatchSummary(ctx, batchID)
+	if err != nil {
+		return domain.BatchCancellation{}, err // the repository already wraps it with the ID
+	}
+	return domain.BatchCancellation{Cancelled: cancelled, Summary: summary}, nil
 }

@@ -107,6 +107,12 @@ type BatchSummary struct {
 	CreatedAt time.Time
 }
 
+// BatchCancellation is the result of cancelling a batch.
+type BatchCancellation struct {
+	Cancelled int          // cancelled by this request
+	Summary   BatchSummary // the batch afterwards
+}
+
 // Batch is a group of notifications created by one request.
 type Batch struct {
 	ID            uuid.UUID

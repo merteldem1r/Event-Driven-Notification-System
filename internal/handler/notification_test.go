@@ -97,6 +97,17 @@ func (f *fakeNotificationService) List(_ context.Context, filter domain.ListFilt
 	return page, nil
 }
 
+// CancelBatch knows only fakeBatchID: it cancels its 3 pending notifications.
+func (f *fakeNotificationService) CancelBatch(ctx context.Context, id uuid.UUID) (domain.BatchCancellation, error) {
+	summary, err := f.GetBatch(ctx, id) // counts calls and handles err and unknown IDs
+	if err != nil {
+		return domain.BatchCancellation{}, err
+	}
+	summary.Counts[domain.StatusCancelled] += summary.Counts[domain.StatusPending]
+	summary.Counts[domain.StatusPending] = 0
+	return domain.BatchCancellation{Cancelled: 3, Summary: summary}, nil
+}
+
 // Cancel knows only fakeID and cancels it.
 func (f *fakeNotificationService) Cancel(_ context.Context, id uuid.UUID) (domain.Notification, error) {
 	f.calls++
@@ -581,5 +592,29 @@ func TestCancelNotification_Errors(t *testing.T) {
 				t.Errorf("got %d %+v, want %d %q %q", rec.Code, got.Error, tt.wantStatus, tt.wantCode, tt.wantMessage)
 			}
 		})
+	}
+}
+
+func TestCancelBatch(t *testing.T) {
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/batches/"+fakeBatchID.String()+"/cancel", nil)
+	rec := httptest.NewRecorder()
+	NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, &fakeNotificationService{}).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body)
+	}
+	want := `{"batch_id":"` + fakeBatchID.String() + `","total":10,` +
+		`"counts":{"pending":0,"processing":0,"sent":6,"failed":1,"cancelled":3},` +
+		`"created_at":"2026-11-20T10:00:00Z","cancelled":3}`
+	if got := strings.TrimSpace(rec.Body.String()); got != want {
+		t.Errorf("body =\n%s\nwant\n%s", got, want)
+	}
+
+	// Errors work as for batch status.
+	req = httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/batches/"+uuid.NewString()+"/cancel", nil)
+	rec = httptest.NewRecorder()
+	NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, &fakeNotificationService{}).ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("unknown batch: status = %d, want 404", rec.Code)
 	}
 }
