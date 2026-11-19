@@ -77,7 +77,7 @@ Status values: **Done**, **Partial**, **Todo**.
 |---|---|---|---|---|
 | DEL-1 | Repository with clean commit history | Partial | all | Conventional Commits enforced by hook + CI (done); ongoing |
 | DEL-2 | README.md: setup, architecture overview, API examples | Todo | 15 | |
-| DEL-3 | Docker Compose: one-command setup (`docker compose up`) | Todo | 2 | |
+| DEL-3 | Docker Compose: one-command setup (`docker compose up`) | Partial | 2 | API Dockerfile (done); compose file pending |
 | DEL-4 | API documentation: Swagger/OpenAPI specification | Todo | 4–15 | Grows with each endpoint |
 | DEL-5 | Database migrations: versioned schema changes | Todo | 3 | golang-migrate |
 | DEL-6 | Test suite runnable with a single command | Partial | all | `make test` (done); grows with each step |

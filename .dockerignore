@@ -1,0 +1,23 @@
+# Files Docker should NOT send into the build.
+# Smaller build context, better layer caching, and no secrets in images.
+
+# Version control and tooling
+.git
+.github
+.githooks
+.claude-logs
+.idea
+.vscode
+
+# Documentation is not needed to compile the binary
+docs
+*.md
+
+# Local environment files may contain secrets
+.env
+.env.*
+
+# Build output and OS files
+*.out
+*.test
+.DS_Store
