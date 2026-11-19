@@ -2,7 +2,7 @@
 
 > **Goal of this document:** choose the technologies that shape everything else, *before*
 > writing code. Each decision lists the options, the trade-offs, and a recommendation.
-> **Nothing here is final until it's marked ✅ Decided.**
+> D1–D3 were decided on 2026-11-19. D4–D9 get decided in the phase that needs them.
 
 ---
 
@@ -10,9 +10,9 @@
 
 | # | Decision | When | Status |
 |---|---|---|---|
-| D1 | Queue technology | **Now** | ⏳ Open |
-| D2 | Where the shared rate limiter lives | **Now** | ⏳ Open |
-| D3 | Tooling (router, DB library, migrations, logging, tests, …) | **Now** (quick confirm) | ⏳ Open |
+| D1 | Queue technology | **Now** | ✅ Decided: PostgreSQL |
+| D2 | Where the shared rate limiter lives | **Now** | ✅ Decided: Redis |
+| D3 | Tooling (router, DB library, migrations, logging, tests, …) | **Now** (quick confirm) | ✅ Decided: as recommended |
 | D4 | Content limits per channel | Phase 4 (create API) | Later |
 | D5 | Batch validation: all-or-nothing vs partial | Phase 5 (batch API) | Later |
 | D6 | Pagination: offset vs cursor | Phase 5 (list API) | Later |
@@ -208,7 +208,7 @@ These have well-known, sensible defaults in Go. Recommendation first; alternativ
 
 ---
 
-## Resulting architecture (if all recommendations are accepted)
+## Resulting architecture
 
 ```
                     docker-compose up
@@ -232,10 +232,8 @@ These have well-known, sensible defaults in Go. Recommendation first; alternativ
 
 ## Decision log
 
-*(Filled in as decisions are made: what was chosen, why, and what we gave up.)*
-
-| # | Decision | Chosen | Date |
-|---|---|---|---|
-| D1 | Queue technology | — | — |
-| D2 | Rate limiter location | — | — |
-| D3 | Tooling | — | — |
+| # | Decision | Chosen | Why | What we give up | Date |
+|---|---|---|---|---|---|
+| D1 | Queue technology | **PostgreSQL** (`FOR UPDATE SKIP LOCKED`), behind a Go `Queue` interface | No dual-write problem; priority, retries, scheduling and cancel are each a column or a `WHERE`; one less service; all queue logic is our own code | Throughput far beyond 300/s; the "classic broker" look | 2026-11-19 |
+| D2 | Rate limiter location | **Redis** (shared token bucket / GCRA) | Correct across any number of worker processes; standard tool; reused for WebSocket updates later | One more service in docker-compose | 2026-11-19 |
+| D3 | Tooling | **chi, pgx v5 + hand-written SQL, golang-migrate, log/slog, prometheus/client_golang, env-var config, testing + testcontainers-go, hand-written OpenAPI, cmd/api + cmd/worker** | Standard, small, explainable Go choices | — | 2026-11-19 |
