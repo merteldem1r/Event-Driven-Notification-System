@@ -29,6 +29,7 @@ Goal: a running service in Docker with the basic tooling around it.
 - [ ] 2.5 Linting (golangci-lint) + CI job running vet, lint and tests **(next)**
 
 **Verify:** `docker compose up` starts everything; `GET /health` → 200; CI green.
+**Summary:** `docs/application/03-project-skeleton.md`.
 
 ## Phase 3 · Database
 Goal: the schema exists and Go code can read/write it, tested against a real Postgres.

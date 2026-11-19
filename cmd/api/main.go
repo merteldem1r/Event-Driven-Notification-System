@@ -25,6 +25,12 @@ func main() {
 // run holds the real startup logic. Returning an error (instead of calling
 // os.Exit deep inside) keeps deferred cleanup working and main trivial.
 func run() error {
+	// Local development: pick up personal settings from .env.local if it exists.
+	// No-op in Docker and production, where the file isn't present.
+	if err := config.LoadDotEnv(".env.local"); err != nil {
+		return err
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		return err

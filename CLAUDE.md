@@ -107,5 +107,8 @@ New packages follow the same idea: one clear responsibility per package, named a
 - **Design decisions belong to the user.** Present the options, trade-offs and a recommendation;
   record the decision in the decision log under `docs/application/`.
 - **Keep the trackers current:** update `docs/plan.md` and `docs/requirements.md` after each step.
+- **One document per big phase:** `docs/application/` holds one numbered document per completed
+  phase, read in order. Each is a short summary of what was implemented and how it works in general;
+  not a tutorial, and not updated for every small step.
 - This is a **standalone project**. Docs don't refer to any company or describe it as an assessment.
 - Prompts pasted from other tools are drafts, not ground truth. Check them against the docs and code.

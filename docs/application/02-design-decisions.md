@@ -19,6 +19,7 @@
 | D7 | Priority strategy: strict vs weighted | Phase 6 (worker) | Later |
 | D8 | Retry numbers: attempts, delays, lease time | Phase 8 (retries) | Later |
 | D9 | Default provider in docker-compose: mock vs webhook.site | Phase 2/6 | Later |
+| D10 | Loading a local `.env.local` for development | Phase 2 | Decided: godotenv |
 
 **Why only D1–D3 now?** They decide *what the database schema looks like, how workers are
 written, and what runs in docker-compose*. Changing them later means rewriting a lot.
@@ -237,3 +238,4 @@ These have well-known, sensible defaults in Go. Recommendation first; alternativ
 | D1 | Queue technology | **PostgreSQL** (`FOR UPDATE SKIP LOCKED`), behind a Go `Queue` interface | No dual-write problem; priority, retries, scheduling and cancel are each a column or a `WHERE`; one less service; all queue logic is our own code | Throughput far beyond 300/s; the "classic broker" look | 2026-11-19 |
 | D2 | Rate limiter location | **Redis** (shared token bucket / GCRA) | Correct across any number of worker processes; standard tool; reused for WebSocket updates later | One more service in docker-compose | 2026-11-19 |
 | D3 | Tooling | **chi, pgx v5 + hand-written SQL, golang-migrate, log/slog, prometheus/client_golang, env-var config, testing + testcontainers-go, hand-written OpenAPI, cmd/api + cmd/worker** | Standard, small, explainable Go choices | — | 2026-11-19 |
+| D10 | Local `.env.local` loading | **godotenv**, via `config.LoadDotEnv` at startup; missing file ignored; never overrides existing variables | Works with `make run-api`, plain `go run` and the IDE debugger; real environment wins over the file; no effect in Docker/production (file not in the image) | One small dependency; one local-only line in startup code (alternative was loading it in the Makefile) | 2026-11-19 |
