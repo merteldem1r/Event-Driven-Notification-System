@@ -1,0 +1,45 @@
+name: Commit messages
+
+# Same rule as the local hook (.githooks/commit-msg), enforced on GitHub
+# so a commit made without the hook (or with --no-verify) is still caught.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history, so we can read every pushed commit
+
+      - name: Check commit messages
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          head="${PR_HEAD:-$GITHUB_SHA}"
+
+          if [ -n "$PR_BASE" ]; then
+            range="$PR_BASE..$head"            # pull request: its own commits
+          elif git cat-file -e "$PUSH_BEFORE^{commit}" 2>/dev/null; then
+            range="$PUSH_BEFORE..$head"        # push: only the new commits
+          else
+            range="$head"                      # new branch / force push: whole history
+          fi
+
+          echo "Checking commits in $range"
+          fail=0
+          for sha in $(git rev-list --no-merges "$range"); do
+            git log -1 --format=%B "$sha" > "$RUNNER_TEMP/msg"
+            if sh .githooks/commit-msg "$RUNNER_TEMP/msg"; then
+              echo "✓ $(git log -1 --format='%h %s' "$sha")"
+            else
+              echo "::error::Bad commit message in $(git log -1 --format='%h' "$sha")"
+              fail=1
+            fi
+          done
+          exit $fail

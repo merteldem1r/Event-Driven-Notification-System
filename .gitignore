@@ -26,3 +26,10 @@ Thumbs.db
 
 # other
 docs/Software-Engineer-Assessment-Golang.pdf
+.claude-logs
+
+## Environment files
+.env
+.env.*
+!.env.example
+
