@@ -10,9 +10,9 @@
 
 | # | Decision | When | Status |
 |---|---|---|---|
-| D1 | Queue technology | **Now** | ✅ Decided: PostgreSQL |
-| D2 | Where the shared rate limiter lives | **Now** | ✅ Decided: Redis |
-| D3 | Tooling (router, DB library, migrations, logging, tests, …) | **Now** (quick confirm) | ✅ Decided: as recommended |
+| D1 | Queue technology | **Now** | Decided: PostgreSQL |
+| D2 | Where the shared rate limiter lives | **Now** | Decided: Redis |
+| D3 | Tooling (router, DB library, migrations, logging, tests, …) | **Now** (quick confirm) | Decided: as recommended |
 | D4 | Content limits per channel | Phase 4 (create API) | Later |
 | D5 | Batch validation: all-or-nothing vs partial | Phase 5 (batch API) | Later |
 | D6 | Pagination: offset vs cursor | Phase 5 (list API) | Later |
@@ -53,9 +53,9 @@ If the database and the queue are **two different systems**, those two writes ca
 atomically (all-or-nothing):
 
 ```
-API:  ① INSERT into Postgres   ✓
-      💥 crash / network error here
-      ② PUSH to RabbitMQ/Redis ✗   → saved as "pending" forever, never sent
+API:  1. INSERT into Postgres     OK
+      -- crash / network error here --
+      2. PUSH to RabbitMQ/Redis  never happens → saved as "pending" forever, never sent
 ```
 
 Swapping the order doesn't help either: push first, crash, and then a worker sends a message the
@@ -115,10 +115,10 @@ How each need maps onto it:
 Redis is a very fast in-memory store. Libraries like `asynq` build a full job queue on it:
 priority queues, retries with backoff, scheduled tasks and a dashboard, all built in.
 
-- ✅ Very fast, with features ready-made.
-- ❌ **Dual-write problem** (Postgres for status + Redis for the queue), so we'd need an outbox.
-- ❌ Two sources of truth for status that can drift apart.
-- ⚠️ The interesting logic (priority, retry, claiming) lives *inside the library*, so there's less of
+- Pro: Very fast, with features ready-made.
+- Con: **Dual-write problem** (Postgres for status + Redis for the queue), so we'd need an outbox.
+- Con: Two sources of truth for status that can drift apart.
+- Caveat: The interesting logic (priority, retry, claiming) lives *inside the library*, so there's less of
   our own design to show and explain.
 
 ### Option C — RabbitMQ
@@ -126,37 +126,37 @@ priority queues, retries with backoff, scheduled tasks and a dashboard, all buil
 A real message broker. Producers publish, consumers receive and **acknowledge** messages, and
 unacknowledged messages are redelivered.
 
-- ✅ Built for this. It has priority queues, acks, and dead-letter exchanges for failed messages.
-- ❌ **Dual-write problem**, so we'd need an outbox.
-- ❌ **Cancel is awkward:** you can't pull one message out of the middle of a queue. The worker
+- Pro: Built for this. It has priority queues, acks, and dead-letter exchanges for failed messages.
+- Con: **Dual-write problem**, so we'd need an outbox.
+- Con: **Cancel is awkward:** you can't pull one message out of the middle of a queue. The worker
   has to check the DB ("still pending?") before sending.
-- ⚠️ Delayed retries and scheduling need workarounds (TTL + dead-letter tricks, or a plugin).
-- ⚠️ One more service to run and monitor.
+- Caveat: Delayed retries and scheduling need workarounds (TTL + dead-letter tricks, or a plugin).
+- Caveat: One more service to run and monitor.
 
 ### Option D — Kafka
 
 A distributed *log* built for enormous throughput and replaying history.
 
-- ❌ No per-message priority (you'd need separate topics), no per-message delay, and no
+- Con: No per-message priority (you'd need separate topics), no per-message delay, and no
   per-message acknowledgment. It's a poor fit for "retry *this one* in 8 seconds".
-- ❌ Heavy to run. Overkill for 300 msg/s.
+- Con: Heavy to run. Overkill for 300 msg/s.
 - Listed so we can explain **why not**, which is a fair question to expect.
 
 ### Scorecard
 
 | Need | A · PostgreSQL | B · Redis (asynq) | C · RabbitMQ | D · Kafka |
 |---|---|---|---|---|
-| Priority | ✅ `ORDER BY` | ✅ built in | ✅ priority queues | ❌ separate topics |
-| Delayed retry | ✅ one column | ✅ built in | ⚠️ workarounds | ❌ retry topics |
-| Scheduled send | ✅ same column | ✅ built in | ⚠️ plugin | ❌ |
-| Cancel | ✅ atomic update | ⚠️ delete task + sync DB | ❌ check DB on consume | ❌ check DB on consume |
-| Save + enqueue atomically | ✅ one transaction | ❌ needs outbox | ❌ needs outbox | ❌ needs outbox |
-| No double-claim | ✅ `SKIP LOCKED` | ✅ | ✅ acks | ✅ partitions |
-| Crash recovery | ✅ lease | ✅ | ✅ redelivery | ✅ offsets |
-| Queue depth | ✅ `count(*)` | ✅ | ✅ management API | ⚠️ consumer lag |
+| Priority | Yes, `ORDER BY` | Yes, built in | Yes, priority queues | No, separate topics |
+| Delayed retry | Yes, one column | Yes, built in | Partly, workarounds | No, retry topics |
+| Scheduled send | Yes, same column | Yes, built in | Partly, plugin | No |
+| Cancel | Yes, atomic update | Partly, delete task + sync DB | No, check DB on consume | No, check DB on consume |
+| Save + enqueue atomically | Yes, one transaction | No, needs outbox | No, needs outbox | No, needs outbox |
+| No double-claim | Yes, `SKIP LOCKED` | Yes | Yes, acks | Yes, partitions |
+| Crash recovery | Yes, lease | Yes | Yes, redelivery | Yes, offsets |
+| Queue depth | Yes, `count(*)` | Yes | Yes, management API | Partly, consumer lag |
 | Extra services | none | Redis | RabbitMQ | Kafka |
 | Throughput ceiling | thousands/s (enough) | very high | very high | extreme |
-| Logic visible in our code | ✅ all ours | ⚠️ in library | mixed | mixed |
+| Logic visible in our code | Yes, all ours | Partly, in library | mixed | mixed |
 
 ### Recommendation: **A, PostgreSQL as the queue**, behind a `Queue` interface
 
@@ -181,7 +181,7 @@ shared by every worker process.
 |---|---|---|---|
 | **Redis** | Token bucket / GCRA in Redis (e.g. the `go-redis/redis_rate` library). Each worker asks Redis "may I send one SMS?" | Atomic, fast, the industry-standard tool for this. Redis can also carry the live updates for the WebSocket feature later. | One more service in docker-compose. |
 | **PostgreSQL** | One row per channel holding tokens + last refill time, updated atomically | No extra service | An extra DB write per message, and every worker fights over 3 hot rows (lock contention). |
-| **In-process** (`golang.org/x/time/rate`) | Each worker process keeps its own limiter | Simplest | ❌ **Wrong** as soon as there are 2+ worker processes (each allows 100/s). This is exactly the trap from section 5.2 of doc 01. |
+| **In-process** (`golang.org/x/time/rate`) | Each worker process keeps its own limiter | Simplest | **Wrong** as soon as there are 2+ worker processes (each allows 100/s). This is exactly the trap from section 5.2 of doc 01. |
 
 **Recommendation: Redis.** The in-process limiter is the tempting wrong answer. It *looks* correct
 with one worker and silently breaks when you scale. Redis is the standard shared limiter and

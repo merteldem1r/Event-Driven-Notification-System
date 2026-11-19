@@ -129,7 +129,7 @@ Step by step:
    `messageId`. On failure it decides: retry later (with a growing wait) or give up (`failed`).
    The client can see the status at any time through the API.
 
-> 💡 **Worth knowing:** `sent` means *the provider accepted it*, not *the phone received
+> **Worth knowing:** `sent` means *the provider accepted it*, not *the phone received
 > it*. Real providers report final delivery later through callbacks (delivery receipts).
 > webhook.site doesn't, so our final success state is "accepted by provider".
 
