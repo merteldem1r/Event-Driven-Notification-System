@@ -1,7 +1,8 @@
-.PHONY: hooks run-api run-worker run-fakeprovider loadtest test lint check up down infra-up logs migrate-up migrate-down
+.PHONY: hooks run-api run-worker run-fakeprovider loadtest smoke vulncheck test lint check up down infra-up logs migrate-up migrate-down
 
-# Same version as CI (.github/workflows/ci.yml). Change both together.
+# Same versions as CI (.github/workflows/ci.yml). Change both together.
 GOLANGCI_LINT_VERSION := v2.15.0
+GOVULNCHECK_VERSION := v1.1.4
 
 ## hooks: use the repo's Git hooks in .githooks (run once after cloning)
 hooks:
@@ -29,7 +30,17 @@ lint:
 	docker run --rm -v "$(CURDIR)":/app -w /app -v golangci-lint-cache:/root/.cache \
 		golangci/golangci-lint:$(GOLANGCI_LINT_VERSION) golangci-lint run ./...
 
-## check: everything CI checks (vet, lint, tests); run before pushing
+## vulncheck: fail if the code calls a function with a known vulnerability (Go or a dependency)
+vulncheck:
+	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
+
+## smoke: start the stack against the fake provider and check one notification end to end
+smoke:
+	@# PROVIDER_URL is set here, so a smoke test never goes to webhook.site.
+	PROVIDER_URL=http://fakeprovider:9090/ docker compose up -d --build --wait
+	./scripts/smoke.sh
+
+## check: the code checks CI runs (vet, lint, tests); run before pushing
 check:
 	go vet ./...
 	$(MAKE) lint

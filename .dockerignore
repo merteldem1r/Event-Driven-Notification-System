@@ -20,6 +20,9 @@ docs/*
 .env
 .env.*
 
+# The web UI has its own toolchain; the Go image never needs it (or its node_modules)
+web
+
 # Build output and OS files
 *.out
 *.test
