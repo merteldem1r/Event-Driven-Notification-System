@@ -10,6 +10,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/merteldem1r/Event-Driven-Notification-System/docs"
 )
 
 // NewRouter builds the HTTP router. With a registry, requests are measured and its metrics are
@@ -33,6 +35,8 @@ func NewRouter(logger *slog.Logger, db Pinger, notifications NotificationService
 	if reg != nil {
 		r.Method(http.MethodGet, "/metrics", Metrics(reg, logger))
 	}
+	r.Get("/openapi.yaml", OpenAPISpec(docs.OpenAPI()))
+	r.Get("/docs", SwaggerUI) // interactive documentation of everything above
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/notifications", ListNotifications(notifications, logger))

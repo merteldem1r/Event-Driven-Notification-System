@@ -9,8 +9,11 @@
 .idea
 .vscode
 
-# Documentation is not needed to compile the binary
-docs
+# Documentation is not needed to compile the binary, except the API specification the API
+# serves at /openapi.yaml (embedded by docs/docs.go)
+docs/*
+!docs/openapi.yaml
+!docs/docs.go
 *.md
 
 # Local environment files may contain secrets

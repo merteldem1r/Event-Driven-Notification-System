@@ -589,6 +589,43 @@ paths:
                 # TYPE notifications_queue_depth gauge
                 notifications_queue_depth{channel="sms",status="pending"} 1250
 
+  /openapi.yaml:
+    get:
+      tags: [operations]
+      operationId: openAPISpec
+      summary: This API specification
+      description: The OpenAPI document you are reading, as YAML.
+      responses:
+        "200":
+          description: The specification.
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationID"
+          content:
+            application/yaml:
+              schema:
+                type: string
+
+  /docs:
+    get:
+      tags: [operations]
+      operationId: swaggerUI
+      summary: Interactive API documentation
+      description: |
+        Swagger UI for this specification: every endpoint with its fields and examples, and a
+        "Try it out" button that sends real requests to this API. Open it in a browser. The page
+        loads Swagger UI from a CDN, so the browser needs internet access.
+      responses:
+        "200":
+          description: The documentation page.
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationID"
+          content:
+            text/html:
+              schema:
+                type: string
+
 components:
   parameters:
     IdempotencyKey:
