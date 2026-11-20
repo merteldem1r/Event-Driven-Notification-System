@@ -9,7 +9,7 @@ is tested. Then we stop, explain it, and the user commits it.
 
 Status: `[x]` done, `[ ]` not done. The next step is marked **(next)**.
 
-> **Current position:** Phase 15, step **15.2** (README).
+> **Current position:** Phase 15, step **15.3** (Swagger UI).
 
 ---
 
@@ -118,5 +118,5 @@ asking for it.
 
 ## Phase 15 · Proof and polish
 - [x] 15.1 Load test: burst proves the 100/s cap holds (IMP-9); done early in 7.4
-- [ ] 15.2 Final README: setup, architecture, API examples (DEL-2) **(next)**
-- [ ] 15.3 OpenAPI complete + Swagger UI (DEL-4)
+- [x] 15.2 README: the idea and building blocks, getting started (Docker and local), how it works step by step with diagrams (flow, priority, shared rate limit, retries), key decisions, failure behavior, measured results with charts, reference (API, monitoring, tests, configuration) (DEL-2)
+- [ ] 15.3 OpenAPI complete + Swagger UI (DEL-4) **(next)**

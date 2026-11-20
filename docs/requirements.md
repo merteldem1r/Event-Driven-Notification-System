@@ -76,7 +76,7 @@ Status values: **Done**, **Partial**, **Todo**.
 | ID | Deliverable | Status | Phase | Notes |
 |---|---|---|---|---|
 | DEL-1 | Repository with clean commit history | Partial | all | Conventional Commits enforced by hook + CI (done); ongoing |
-| DEL-2 | README.md: setup, architecture overview, API examples | Todo | 15 | |
+| DEL-2 | README.md: setup, architecture overview, API examples | Done | 15 | Idea and building blocks, getting started, how it works with Mermaid diagrams, design decisions, failure behavior, measured results, API and monitoring reference |
 | DEL-3 | Docker Compose: one-command setup (`docker compose up`) | Done | 2, 6 | api, worker, fake provider, migrations, PostgreSQL, Redis; works without any settings (the worker uses the fake provider unless `PROVIDER_URL` is set) |
 | DEL-4 | API documentation: Swagger/OpenAPI specification | Partial | 4–15 | `docs/openapi.yaml` (OpenAPI 3.0.3) covers every endpoint so far (create, batch, get, list, batch status, both cancels, health); tests keep it in sync with the router and real responses; grows with each endpoint; Swagger UI in Phase 15 |
 | DEL-5 | Database migrations: versioned schema changes | Done | 3 | golang-migrate, numbered up/down SQL files, applied automatically by Compose; new migrations added as features need them |
