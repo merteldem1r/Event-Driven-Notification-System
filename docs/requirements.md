@@ -56,9 +56,9 @@ Status values: **Done**, **Partial**, **Todo**.
 
 | ID | Requirement | Status | Phase | Notes |
 |---|---|---|---|---|
-| PRV-1 | Send `POST {to, channel, content}` to the provider (webhook.site) | Todo | 6 | |
-| PRV-2 | Handle the expected `202 {messageId, status, timestamp}` response | Todo | 6 | |
-| PRV-3 | Provider behind an interface; URL from config; local mock available | Todo | 6 | Default in docker-compose is decision D9 |
+| PRV-1 | Send `POST {to, channel, content}` to the provider (webhook.site) | Partial | 6 | Client done (`internal/provider`); the worker uses it from 6.4 |
+| PRV-2 | Handle the expected `202 {messageId, status, timestamp}` response | Partial | 6 | Parsed by the client; a 2xx without `messageId` is an error; stored from 6.4 |
+| PRV-3 | Provider behind an interface; URL from config; local mock available | Partial | 6 | `PROVIDER_URL` from config (done); interface in 6.4; local fake provider optional later (D9) |
 
 ## 6. Optional Features
 

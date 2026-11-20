@@ -25,6 +25,9 @@ func TestLoad(t *testing.T) {
 		if c.WorkerLeaseDuration == 0 {
 			c.WorkerLeaseDuration = 60 * time.Second
 		}
+		if c.ProviderTimeout == 0 {
+			c.ProviderTimeout = 5 * time.Second
+		}
 		return c
 	}
 
@@ -53,8 +56,35 @@ func TestLoad(t *testing.T) {
 			want: Config{
 				HTTPPort: 8080, LogLevel: slog.LevelInfo, DatabaseURL: dbURL,
 				WorkerConcurrency: 5, WorkerPollInterval: 2 * time.Second, WorkerShutdownTimeout: time.Minute,
-				WorkerLeaseDuration: 2 * time.Minute,
+				WorkerLeaseDuration: 2 * time.Minute, ProviderTimeout: 5 * time.Second,
 			},
+		},
+		{
+			name: "provider settings",
+			env: map[string]string{
+				"DATABASE_URL": dbURL, "PROVIDER_URL": "https://webhook.site/abc", "PROVIDER_TIMEOUT": "2s",
+			},
+			want: withDefaults(Config{
+				HTTPPort: 8080, LogLevel: slog.LevelInfo, DatabaseURL: dbURL,
+				ProviderURL: "https://webhook.site/abc", ProviderTimeout: 2 * time.Second,
+			}),
+		},
+		{
+			name:    "provider url without scheme",
+			env:     map[string]string{"DATABASE_URL": dbURL, "PROVIDER_URL": "webhook.site/abc"},
+			wantErr: "PROVIDER_URL must be a full http(s) URL",
+		},
+		{
+			name:    "provider url with another scheme",
+			env:     map[string]string{"DATABASE_URL": dbURL, "PROVIDER_URL": "ftp://example.com/x"},
+			wantErr: "PROVIDER_URL must be a full http(s) URL",
+		},
+		{
+			name: "lease not longer than provider timeout",
+			env: map[string]string{
+				"DATABASE_URL": dbURL, "PROVIDER_TIMEOUT": "60s", "WORKER_LEASE_DURATION": "60s",
+			},
+			wantErr: "WORKER_LEASE_DURATION must be longer than PROVIDER_TIMEOUT",
 		},
 		{
 			name:    "concurrency not a number",
@@ -104,6 +134,7 @@ func TestLoad(t *testing.T) {
 			for _, key := range []string{
 				"HTTP_PORT", "LOG_LEVEL", "DATABASE_URL",
 				"WORKER_CONCURRENCY", "WORKER_POLL_INTERVAL", "WORKER_SHUTDOWN_TIMEOUT", "WORKER_LEASE_DURATION",
+				"PROVIDER_URL", "PROVIDER_TIMEOUT",
 			} {
 				t.Setenv(key, "")
 			}

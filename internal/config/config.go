@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net/url"
 	"os"
 	"strconv"
 	"time"
@@ -23,6 +24,9 @@ type Config struct {
 	WorkerPollInterval    time.Duration // idle wait before checking the queue again
 	WorkerShutdownTimeout time.Duration // time in-flight work gets after a stop signal
 	WorkerLeaseDuration   time.Duration // how long a claimed notification belongs to its worker
+
+	ProviderURL     string        // where the worker sends notifications (D9: webhook.site); empty if unset
+	ProviderTimeout time.Duration // limit for one send
 }
 
 // MaxWorkerConcurrency caps WORKER_CONCURRENCY; more loops than this only add database load.
@@ -73,10 +77,27 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	providerURL := os.Getenv("PROVIDER_URL")
+	if providerURL != "" {
+		u, err := url.Parse(providerURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return Config{}, errors.New("PROVIDER_URL must be a full http(s) URL, e.g. https://webhook.site/<your-id>")
+		}
+	}
+	providerTimeout, err := positiveDuration("PROVIDER_TIMEOUT", "5s")
+	if err != nil {
+		return Config{}, err
+	}
+	// A send outliving its lease could be taken over by another worker and delivered twice.
+	if lease <= providerTimeout {
+		return Config{}, errors.New("WORKER_LEASE_DURATION must be longer than PROVIDER_TIMEOUT")
+	}
+
 	return Config{
 		HTTPPort: port, LogLevel: level, DatabaseURL: dbURL,
 		WorkerConcurrency: concurrency, WorkerPollInterval: poll, WorkerShutdownTimeout: shutdown,
 		WorkerLeaseDuration: lease,
+		ProviderURL:         providerURL, ProviderTimeout: providerTimeout,
 	}, nil
 }
 
