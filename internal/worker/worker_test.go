@@ -1,7 +1,9 @@
 package worker
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"sync"
@@ -34,12 +36,50 @@ type fakeProcessor struct {
 func (f *fakeProcessor) Wait(ctx context.Context) error {
 	f.mu.Lock()
 	f.waits++
+	block, err := f.waitBlock, f.waitErr
 	f.mu.Unlock()
-	if f.waitBlock {
+	if block {
 		<-ctx.Done()
 		return ctx.Err()
 	}
-	return f.waitErr
+	return err
+}
+
+// setWaitErr changes what Wait returns, e.g. nil once "Redis is back".
+func (f *fakeProcessor) setWaitErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.waitErr = err
+}
+
+// syncBuffer collects log output written by many loops at once.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+// lines returns the JSON log lines whose msg is msg.
+func (b *syncBuffer) lines(t *testing.T, msg string) []map[string]any {
+	t.Helper()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var found []map[string]any
+	for _, l := range bytes.Split(bytes.TrimSpace(b.buf.Bytes()), []byte("\n")) {
+		var line map[string]any
+		if err := json.Unmarshal(l, &line); err != nil {
+			t.Fatalf("log line is not JSON: %q", l)
+		}
+		if line["msg"] == msg {
+			found = append(found, line)
+		}
+	}
+	return found
 }
 
 func (f *fakeProcessor) ProcessNext(ctx context.Context) (bool, error) {
@@ -204,6 +244,45 @@ func TestRun_WaitErrorTakesNothing(t *testing.T) {
 		}
 		if calls, _, _ := proc.snapshot(); calls != 0 {
 			t.Errorf("ProcessNext called %d times, want 0", calls)
+		}
+	})
+}
+
+// An outage is logged twice, when it starts and when it ends, not on every retry of every loop.
+func TestRun_LogsAnOutageOnceNotEveryRetry(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		proc := &fakeProcessor{waitErr: errors.New("redis down")}
+		var logs syncBuffer
+		cfg := testConfig
+		cfg.Concurrency = 3
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- New([]Processor{proc}, cfg, slog.New(slog.NewJSONHandler(&logs, nil))).Run(ctx) }()
+
+		time.Sleep(10 * cfg.PollInterval) // 3 loops retry about 10 times each
+		synctest.Wait()
+		failedTries := proc.waitCount()
+		proc.setWaitErr(nil) // Redis is back
+		time.Sleep(cfg.PollInterval)
+		synctest.Wait()
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatalf("Run = %v, want nil", err)
+		}
+
+		if got := logs.lines(t, "waiting to process failed"); len(got) != 1 {
+			t.Errorf("%d error lines, want 1 for the whole outage (of %d failed tries)", len(got), failedTries)
+		}
+		again := logs.lines(t, "working again")
+		if len(again) != 1 {
+			t.Fatalf("%d \"working again\" lines, want 1", len(again))
+		}
+		if tries := int(again[0]["failed_tries"].(float64)); tries != failedTries {
+			t.Errorf("failed_tries = %d, want %d", tries, failedTries)
+		}
+		// The last failed retry was at 5 s; the next one, half a second later, works.
+		if again[0]["down_for"] != "5.5s" {
+			t.Errorf("down_for = %v, want 5.5s", again[0]["down_for"])
 		}
 	})
 }

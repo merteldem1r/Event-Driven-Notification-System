@@ -9,7 +9,7 @@ import (
 
 func TestRedisLogger_WritesJSON(t *testing.T) {
 	var buf bytes.Buffer
-	l := RedisLogger{Logger: slog.New(slog.NewJSONHandler(&buf, nil))}
+	l := RedisLogger{Logger: slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))}
 
 	l.Printf(t.Context(), "redis: connection pool: failed to dial after %d attempts", 5)
 
@@ -17,8 +17,8 @@ func TestRedisLogger_WritesJSON(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &line); err != nil {
 		t.Fatalf("not one JSON line: %q (%v)", buf.String(), err)
 	}
-	if line["level"] != "WARN" || line["component"] != "redis" ||
+	if line["level"] != "DEBUG" || line["component"] != "redis" ||
 		line["msg"] != "redis: connection pool: failed to dial after 5 attempts" {
-		t.Errorf("log line = %v, want a WARN from component redis with the formatted message", line)
+		t.Errorf("log line = %v, want a DEBUG line from component redis with the formatted message", line)
 	}
 }

@@ -33,9 +33,19 @@ type Config struct {
 // Worker runs Config.Concurrency loops for each processor, each loop calling its processor
 // again and again. The worker program has one processor per channel (D16).
 type Worker struct {
-	procs  []Processor
-	cfg    Config
-	logger *slog.Logger
+	procs   []Processor
+	cfg     Config
+	logger  *slog.Logger
+	trouble trouble
+}
+
+// trouble tracks errors in a row across all loops, so an outage (e.g. Redis or the database
+// down) is logged when it starts and when it ends, not on every retry of every loop.
+type trouble struct {
+	mu       sync.Mutex
+	failing  int       // loops whose last try failed
+	since    time.Time // when the first of them failed
+	failures int       // failed tries since then
 }
 
 // New returns a Worker. cfg is expected to be valid (config.Load checks it).
@@ -86,6 +96,7 @@ func (w *Worker) Run(ctx context.Context) error {
 // loop has proc process one notification after another until stop is cancelled.
 // stop decides whether to take more work; work is passed to the processor.
 func (w *Worker) loop(stop, work context.Context, proc Processor, id int) {
+	failing := false // this loop's last try failed
 	for stop.Err() == nil {
 		// Nothing is taken while waiting, so the stop signal ends the wait right away.
 		err := proc.Wait(stop)
@@ -93,20 +104,59 @@ func (w *Worker) loop(stop, work context.Context, proc Processor, id int) {
 			return // stopped while waiting: take nothing new
 		}
 		if err != nil { // e.g. Redis down: take nothing (fail closed) and try again later
-			w.logger.ErrorContext(work, "waiting to process failed", "loop", id, "error", err)
+			w.failed(work, &failing, id, "waiting to process failed", err)
 			w.pause(stop)
 			continue
 		}
 
 		found, err := proc.ProcessNext(work)
-		if err != nil {
-			w.logger.ErrorContext(work, "processing failed", "loop", id, "error", err)
+		if err != nil { // e.g. database down: wait, so we don't spin
+			w.failed(work, &failing, id, "processing failed", err)
+			w.pause(stop)
+			continue
 		}
-		if found && err == nil {
-			continue // more may be waiting: don't sleep while the queue is busy
+		w.succeeded(work, &failing)
+		if !found {
+			w.pause(stop) // empty queue; if found, more may be waiting, so go on at once
 		}
-		// Empty queue or an error (e.g. database down): wait, so we don't spin.
-		w.pause(stop)
+	}
+}
+
+// failed records a failed try of one loop. Only the first failure of an outage is logged as
+// an error; the retries that follow are logged at debug level.
+func (w *Worker) failed(ctx context.Context, failing *bool, id int, msg string, err error) {
+	t := &w.trouble
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !*failing {
+		*failing = true
+		t.failing++
+	}
+	if t.failures == 0 { // the outage starts
+		t.since = time.Now()
+		t.failures = 1
+		w.logger.ErrorContext(ctx, msg, "loop", id, "error", err,
+			"retry_every", w.cfg.PollInterval.String(), "note", "retries are logged at debug level")
+		return
+	}
+	t.failures++
+	w.logger.DebugContext(ctx, msg, "loop", id, "error", err)
+}
+
+// succeeded records a successful try; once no loop is failing any more, the outage's end is logged.
+func (w *Worker) succeeded(ctx context.Context, failing *bool) {
+	if !*failing {
+		return
+	}
+	*failing = false
+	t := &w.trouble
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.failing--
+	if t.failing == 0 {
+		w.logger.InfoContext(ctx, "working again", "down_for", time.Since(t.since).Round(time.Millisecond).String(),
+			"failed_tries", t.failures)
+		t.failures = 0
 	}
 }
 

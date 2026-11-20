@@ -78,6 +78,7 @@ Goal: the schema exists and Go code can read/write it, tested against a real Pos
 - [x] 7.1 Redis client (`database.ConnectRedis`) + shared per-channel limiter (`internal/ratelimit`, D15: GCRA via `redis_rate`, 100/s, burst 10, fail closed); `REDIS_URL`, `RATE_LIMIT_PER_SECOND`, `RATE_LIMIT_BURST`; tests against a real Redis, including two limiters on separate clients staying at 100/s together (PROC-2, IMP-1)
 - [x] 7.2 Loops per channel (D16): claim filtered by channel on a new index `(channel, priority, next_attempt_at)` (migrations 000003, 000004); one dispatcher per channel with its own 6:3:1 pattern; worker runs `WORKER_CONCURRENCY` loops per channel (default 10); Docker image built with Go 1.26 (needed by go-redis since 7.1)
 - [x] 7.3 Each channel loop waits for a rate-limit slot before claiming (`Processor.Wait`, ended by the stop signal; error = take nothing, retry after the poll interval); worker requires `REDIS_URL` and connects at startup; Redis library logs as JSON; Compose worker gets `REDIS_URL` and waits for Redis (PROC-2)
+- [x] 7.3.1 Outage logging: an outage (Redis or database down) logs one error when it starts and one `working again` (with `down_for`, `failed_tries`) when every loop works again; retries and the Redis library's own messages at debug level. Measured: a 17 s Redis outage logged 2 lines instead of ~1,400 (OBS-2)
 - [ ] 7.4 Test with several workers: total stays ≤ 100/s per channel (IMP-1); Phase 7 summary `docs/application/08-rate-limiting.md` **(next)**
 
 ## Phase 8 · Retries and failure handling

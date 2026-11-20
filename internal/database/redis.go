@@ -30,7 +30,8 @@ type RedisLogger struct {
 	Logger *slog.Logger
 }
 
-// Printf logs one library message as a warning: they report trouble such as failed connections.
+// Printf logs one library message at debug level: the failures it reports (e.g. a refused
+// connection) also come back to our code as errors, which the worker logs once per outage.
 func (l RedisLogger) Printf(ctx context.Context, format string, v ...any) {
-	l.Logger.WarnContext(ctx, fmt.Sprintf(format, v...), "component", "redis")
+	l.Logger.DebugContext(ctx, fmt.Sprintf(format, v...), "component", "redis")
 }
