@@ -44,5 +44,5 @@ make loadtest
 ## Not done yet / decided later
 
 - Swagger UI needs internet access in the browser (the CDN); the spec itself works offline.
-- Optional features (scheduled notifications, templates, WebSocket updates, tracing) and the
-  re-queue endpoint (8.5) remain optional.
+- Optional features (scheduled notifications, templates, WebSocket updates, tracing, full CI/CD)
+  are chosen and built after this phase.

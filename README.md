@@ -160,17 +160,8 @@ waits for the actual delivery; it can check the status any time, or send a whole
 ### Step 2. Most important first, but nobody waits forever
 
 Each notification has a priority: `high`, `normal` or `low`. When all three kinds are waiting,
-workers pick them in a fixed mix:
-
-```mermaid
-pie showData
-    title Out of every 10 notifications picked
-    "high" : 6
-    "normal" : 3
-    "low" : 1
-```
-
-Urgent messages go first, but low-priority ones still move. Each channel (SMS, email, push) has
+workers pick them in a fixed mix: out of every 10, 6 are high, 3 normal and 1 low. Urgent
+messages go first, but low-priority ones still move. Each channel (SMS, email, push) has
 its own line, so a pile-up of SMS never delays an email.
 
 ### Step 3. Never faster than the provider allows

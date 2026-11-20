@@ -4,7 +4,7 @@
 > growing, randomized waits, respecting the provider's `Retry-After`, up to 5 attempts; failures
 > a retry can't fix end at once. Notifications of a worker that crashed mid-send are taken back
 > when its lease expires and sent by another worker.
-> **Status:** done. The re-queue endpoint (8.5) is optional; the circuit breaker was dropped.
+> **Status:** done. A re-queue endpoint and a circuit breaker were dropped as not needed.
 
 ## What was implemented
 
@@ -76,8 +76,8 @@ GET it: processing for ~60 s, then sent on attempt 2
 
 ## Not done yet / decided later
 
-- Re-queueing `failed` notifications through the API (8.5) is optional, done only if time is
-  left. No circuit breaker: retries with backoff and a maximum cover provider outages here.
+- No re-queue endpoint for `failed` notifications and no circuit breaker: retries with backoff
+  and a maximum cover provider outages here.
 - The fake provider answers only `202` or `503`, without `Retry-After`; `429`, other statuses
   and `Retry-After` are covered by tests with a test server.
 - A notification that crashes its worker every time would be taken back again and again; in Go

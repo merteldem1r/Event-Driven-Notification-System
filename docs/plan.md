@@ -9,7 +9,7 @@ is tested. Then we stop, explain it, and the user commits it.
 
 Status: `[x]` done, `[ ]` not done. The next step is marked **(next)**.
 
-> **Current position:** required work done. Optional: 8.5 (re-queue endpoint) or one optional feature (10 to 14).
+> **Current position:** required work done. Next: choosing the optional features (10 to 14).
 
 ---
 
@@ -84,7 +84,7 @@ Goal: the schema exists and Go code can read/write it, tested against a real Pos
 **Verify:** `make loadtest` (also `make loadtest WORKERS=5`) passes: busiest second at the provider at most 100 per channel, every notification sent.
 **Summary:** `docs/application/08-rate-limiting.md`.
 
-## Phase 8 · Retries and failure handling (done; 8.5 optional)
+## Phase 8 · Retries and failure handling (done)
 - [x] 8.1 Classify provider errors (D18): `provider.IsTemporary` says temporary for no response, `408`, `429`, `5xx` and a `2xx` without a `messageId`, permanent for `3xx`, other `4xx` and errors before sending; the worker logs `temporary` with each failure (still final until 8.2) (RET-1)
 - [x] 8.2 Temporary failures go back to `pending` with `next_attempt_at` moved ahead (`repository.Retry`); waits from `internal/retry` (D8: 10 s doubling to 10 min, equal jitter), provider's `Retry-After` (seconds or date) used when longer; `RETRY_BASE_DELAY`, `RETRY_MAX_DELAY`; API shows `next_attempt_at` while a retry waits. Until 8.3 there is no maximum: a temporary failure keeps retrying, at most every 10 min (RET-1, RET-2, RET-4)
 - [x] 8.3 Max attempts (D8: `RETRY_MAX_ATTEMPTS`, default 5): `retry.Policy.Next` says wait or stop; after the last attempt a temporary failure is `failed` with its last error, logged with `reason: no attempts left` (a rejection logs `rejected by the provider`) (RET-3)
@@ -92,11 +92,10 @@ Goal: the schema exists and Go code can read/write it, tested against a real Pos
 
 **Verify:** kill a worker during a send (`docker compose kill worker`), start it again: the notification is `sent` on attempt 2 about a minute later.
 **Summary:** `docs/application/09-retries.md`.
-- [ ] 8.5 *(optional, only if time is left at the end)* Re-queue endpoint for failed notifications (OPT-1)
 
-Dropped: a circuit breaker. Retries with backoff and a maximum (8.2, 8.3) already handle a provider
-outage well enough for this service; a breaker would add state and edge cases without a requirement
-asking for it.
+Dropped: a circuit breaker and a re-queue endpoint for `failed` notifications. Retries with
+backoff and a maximum (8.2, 8.3) already handle a provider outage well enough for this service;
+both would add state and edge cases without a requirement asking for them.
 
 **Order after Phase 8:** Phase 9 (required metrics and worker health), then the README and Swagger UI
 (15.2, 15.3), then at most one optional feature (scheduled notifications is the cheapest).
