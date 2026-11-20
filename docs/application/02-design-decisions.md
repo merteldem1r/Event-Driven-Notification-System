@@ -30,6 +30,7 @@
 | D18 | Which provider errors are worth retrying | Phase 8 (retries) | Decided: no response, 408, 429, 5xx, and 2xx without a receipt; not 3xx or other 4xx |
 | D19 | How notifications of a crashed worker are taken back | Phase 8 (retries) | Decided: a sweep every 10 s puts expired leases back in the queue |
 | D20 | Metrics: queue depth, send results, latency, HTTP | Phase 9 (observability) | Decided: queue counted on each scrape; one send counter with `result`; two latency histograms; HTTP request metrics |
+| D21 | Scheduled notifications: storage and rules | Phase 10 (scheduling) | Decided: `scheduled_at` column; future only, at most 30 days; per batch item |
 
 **Why only D1–D3 now?** They decide *what the database schema looks like, how workers are
 written, and what runs in docker-compose*. Changing them later means rewriting a lot.
@@ -542,6 +543,31 @@ between the two clocks doesn't matter at these scales.
 
 ---
 
+## D21 — Scheduled notifications
+
+A client can ask for a notification to be sent later (`scheduled_at`). The queue already holds
+any row whose `next_attempt_at` is in the future, so the mechanism is free; four rules had to
+be chosen:
+
+- **Storage.** A new `scheduled_at` column, with `next_attempt_at` starting at it; or only
+  `next_attempt_at`. With only `next_attempt_at`, the requested time is lost after the first
+  retry, and the delivery-time metric would count a day-ahead schedule as a day of delay.
+- **A time in the past.** Reject it, or send at once. A past time is most often a time zone
+  mistake (15:00 meant locally, sent as 15:00 UTC); sending at once would hide it.
+- **How far ahead.** 7 days, 30 days, or no limit. Without a limit a typo such as 2062 sits in
+  the table for decades.
+- **Batches.** Each item with its own time, or no scheduling in batches.
+
+Chosen: **a `scheduled_at` column (migration 000006) with `next_attempt_at` starting there; a
+time must be in the future and at most 30 days ahead, otherwise `400`; each batch item may
+have its own time.** Times are RFC 3339 with a time zone; a malformed one is a `400
+invalid_body` naming the field. A scheduled notification is `pending` until then, so cancel
+works on it unchanged. The delivery-time metric counts from `scheduled_at` when there is one.
+The check uses the API's clock and the claim the database's; the small difference between the
+two doesn't matter at these scales. An idempotent replay must repeat the same time.
+
+---
+
 ## Resulting architecture
 
 ```
@@ -586,6 +612,7 @@ between the two clocks doesn't matter at these scales.
 | D18 | Provider errors worth retrying | **Temporary: no response, `408`, `429`, `5xx`, `2xx` without a `messageId`; permanent: `3xx`, other `4xx`, errors before sending**; decided by `provider.IsTemporary` | Retries only where they can help; a garbled receipt is retried with the same `Idempotency-Key` | A possible duplicate from a provider that ignores `Idempotency-Key` and sends a broken receipt | 2026-11-20 |
 | D19 | Crashed worker recovery | **A sweep in every worker, every 10 s, puts `processing` rows with an expired lease back to `pending`** (attempt kept, `last_error` says why); lease 60 s; partial index on `locked_until` | The claim query stays simple; a stopped worker's notification is sent again within ~70 s; a late result from a slow worker is refused by the attempt check | Up to ~70 s delay after a crash; a possible duplicate if the crashed request had reached the provider | 2026-11-20 |
 | D20 | Metrics | **API:** `notifications_queue_depth{channel,status}` and `notifications_queue_oldest_due_seconds{channel}` counted in the database on each scrape; `http_requests_total{method,route,status}`, `http_request_duration_seconds{method,route}`. **Worker (9.2):** `notifications_send_total{channel,result}`, provider-call and end-to-end latency histograms, recovered leases. Own registry per program | Exact queue numbers without coordination between processes; success rate from one counter; latency seen both at the provider and by the customer; bounded series (route patterns, not URLs) | One small query per scrape; the same queue numbers from every API instance | 2026-11-20 |
+| D21 | Scheduled notifications | **Optional `scheduled_at` (RFC 3339 with a time zone), stored in a new column; `next_attempt_at` starts there; must be in the future and at most 30 days ahead, otherwise `400`; per batch item** | A past time is usually a time zone mistake; the column keeps the requested time through retries and lets the delivery metric count from it | Clients wanting "now" leave the field out; no scheduling beyond 30 days | 2026-11-20 |
 | D9 | Provider | **webhook.site only, for now**: the worker sends to `PROVIDER_URL` (your own webhook.site URL, set to answer `202 {messageId, status, timestamp}`); an own local fake provider is noted in the plan as an optional later step | Exactly the integration the requirements ask for; less code now; every send is visible in the browser | Offline runs; load tests beyond webhook.site's free request limit; a provider that fails or slows down on purpose for retry tests (until the fake is added) | 2026-11-20 |
 | D8 | Retry numbers | **5 attempts; waits start at 10 s and double, capped at 10 min; equal jitter (half to all of the wait); `Retry-After` used when longer, same cap**; then `failed` with the last error; `RETRY_MAX_ATTEMPTS`, `RETRY_BASE_DELAY`, `RETRY_MAX_DELAY` | Covers blips and short outages (~2.5 min in total) while messages are still useful; retries that failed together are spread out; never earlier than the provider asked, never parked for days | Long outages end in `failed` rather than waiting longer | 2026-11-20 |
-\1 **Own fake provider by default** (`cmd/fakeprovider`, `internal/fakeprovider`): answers `POST` on any path like webhook.site with `202 {messageId, status, timestamp}`; `FAKE_PROVIDER_LATENCY` (default 50ms) and `FAKE_PROVIDER_FAILURE_RATE` (share answered `503`); logs the messages received per channel each second; a Compose service the worker uses unless `PROVIDER_URL` is set (e.g. to webhook.site in `.env`) | Load tests at 100/s per channel without webhook.site's free request limit; provider failures on demand for Phase 8; works offline; the per-second report measures the rate limit | A second, simpler provider than the real one (no `429`, no `Retry-After` yet; added when Phase 8 needs them) | 2026-11-20 |
+| D9 (revised) | Provider | **Own fake provider by default** (`cmd/fakeprovider`, `internal/fakeprovider`): answers `POST` on any path like webhook.site with `202 {messageId, status, timestamp}`; `FAKE_PROVIDER_LATENCY` (default 50ms) and `FAKE_PROVIDER_FAILURE_RATE` (share answered `503`); logs the messages received per channel each second; a Compose service the worker uses unless `PROVIDER_URL` is set (e.g. to webhook.site in `.env`) | Load tests at 100/s per channel without webhook.site's free request limit; provider failures on demand for Phase 8; works offline; the per-second report measures the rate limit | A second, simpler provider than the real one (no `429`, no `Retry-After` yet; added when Phase 8 needs them) | 2026-11-20 |

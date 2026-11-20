@@ -9,7 +9,7 @@ is tested. Then we stop, explain it, and the user commits it.
 
 Status: `[x]` done, `[ ]` not done. The next step is marked **(next)**.
 
-> **Current position:** required work done. Next: choosing the optional features (10 to 14).
+> **Current position:** optional features, in this order: 10 scheduled notifications (done), 11 templates **(next)**, 14 full CI/CD; then decide on more (WebSocket, 12).
 
 ---
 
@@ -109,7 +109,14 @@ both would add state and edge cases without a requirement asking for them.
 - [x] 9.3 Correlation ID carried into worker logs (OBS-2, OBS-3); done early in 6.2
 
 ## Phase 10–14 · Optional features
-- [ ] 10 Scheduled notifications (OPT-2)
+Chosen: 10, 11 and 14, in that order (cheapest first, CI/CD last so it covers the new code); 12
+(WebSocket) to be decided after them; 13 (tracing) not planned.
+
+- [x] 10 Scheduled notifications (D21): optional `scheduled_at` on single and batch creates
+  (RFC 3339 with a time zone), stored in a new column (migration 000006) with `next_attempt_at`
+  starting there, so the queue holds it until then; future only, at most 30 days ahead, else
+  `400`; shown in responses; delivery-time metric counts from it. Measured: scheduled 15 s
+  ahead, sent 0.44 s after its time (OPT-2). Summary: `docs/application/12-scheduled-notifications.md`
 - [ ] 11 Templates with variable substitution (OPT-3)
 - [ ] 12 WebSocket status updates (OPT-4)
 - [ ] 13 Distributed tracing with OpenTelemetry + Jaeger (OPT-5)

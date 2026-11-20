@@ -166,6 +166,9 @@ on), stores the notification and answers `202 Accepted` within milliseconds. The
 waits for the actual delivery; it can check the status any time, or send a whole batch of up to
 1,000 notifications in one request.
 
+A notification can also be **scheduled** for later, up to 30 days ahead, with `scheduled_at`.
+It waits in the queue until that time and can be cancelled until then.
+
 ### Step 2. Most important first, but nobody waits forever
 
 Each notification has a priority: `high`, `normal` or `low`. When all three kinds are waiting,
@@ -302,7 +305,7 @@ All endpoints are under `/api/v1` and use JSON. Try them at
 
 | Request | What it does |
 |---|---|
-| `POST /notifications` | Create a notification. An optional `Idempotency-Key` header makes retrying safe |
+| `POST /notifications` | Create a notification, now or at a `scheduled_at` time. An optional `Idempotency-Key` header makes retrying safe |
 | `POST /notifications/batch` | Create up to 1,000 at once, all or nothing |
 | `GET /notifications/{id}` | Status of one notification |
 | `GET /notifications` | List, filtered by `status`, `channel`, `batch_id`, `from`, `to`, page by page |
@@ -313,9 +316,16 @@ All endpoints are under `/api/v1` and use JSON. Try them at
 Channels: `sms`, `email`, `push`. Priorities: `high`, `normal` (default), `low`.
 
 <details>
-<summary>Examples: batch, list, errors</summary>
+<summary>Examples: scheduled, batch, list, errors</summary>
 
 ```bash
+# Schedule a notification (RFC 3339 with a time zone; future, at most 30 days ahead)
+curl -X POST localhost:8080/api/v1/notifications \
+  -H 'Content-Type: application/json' \
+  -d '{"recipient":"user@example.com","channel":"email","content":"Your appointment is tomorrow at 10:00.",
+       "scheduled_at":"2026-11-21T09:00:00+03:00"}'
+# 202 {"status":"pending","scheduled_at":"2026-11-21T06:00:00Z",...}   sent at that time
+
 # Create a batch
 curl -X POST localhost:8080/api/v1/notifications/batch \
   -H 'Content-Type: application/json' \
@@ -429,6 +439,5 @@ docs/             design documents, decision log, plan, requirements, OpenAPI
 ### With more time
 
 - Prometheus and Grafana in Docker Compose with a ready-made dashboard.
-- An endpoint to resend `failed` notifications after a provider outage.
 - Archiving old notifications as the table grows.
-- Scheduled notifications, message templates, live status updates, and tracing.
+- Live status updates over WebSocket, and distributed tracing.
