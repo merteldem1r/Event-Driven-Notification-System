@@ -9,7 +9,7 @@ is tested. Then we stop, explain it, and the user commits it.
 
 Status: `[x]` done, `[ ]` not done. The next step is marked **(next)**.
 
-> **Current position:** Phase 7, step **7.4** (load test with several workers).
+> **Current position:** Phase 8, step **8.1** (classify provider errors).
 
 ---
 
@@ -73,16 +73,19 @@ Goal: the schema exists and Go code can read/write it, tested against a real Pos
 **Verify:** create a notification → a worker sends it → status becomes `sent`; request visible in webhook.site or mock.
 **Summary:** `docs/application/07-worker.md`.
 
-## Phase 7 · Rate limiting
+## Phase 7 · Rate limiting (done)
 - [x] 7.0 Own local fake provider (D9 revised): `cmd/fakeprovider` + `internal/fakeprovider`, answers like webhook.site, `FAKE_PROVIDER_LATENCY` and `FAKE_PROVIDER_FAILURE_RATE`, logs messages per channel per second; Compose service used by the worker unless `PROVIDER_URL` is set; `make run-fakeprovider` (PRV-3)
 - [x] 7.1 Redis client (`database.ConnectRedis`) + shared per-channel limiter (`internal/ratelimit`, D15: GCRA via `redis_rate`, 100/s, burst 10, fail closed); `REDIS_URL`, `RATE_LIMIT_PER_SECOND`, `RATE_LIMIT_BURST`; tests against a real Redis, including two limiters on separate clients staying at 100/s together (PROC-2, IMP-1)
 - [x] 7.2 Loops per channel (D16): claim filtered by channel on a new index `(channel, priority, next_attempt_at)` (migrations 000003, 000004); one dispatcher per channel with its own 6:3:1 pattern; worker runs `WORKER_CONCURRENCY` loops per channel (default 10); Docker image built with Go 1.26 (needed by go-redis since 7.1)
 - [x] 7.3 Each channel loop waits for a rate-limit slot before claiming (`Processor.Wait`, ended by the stop signal; error = take nothing, retry after the poll interval); worker requires `REDIS_URL` and connects at startup; Redis library logs as JSON; Compose worker gets `REDIS_URL` and waits for Redis (PROC-2)
 - [x] 7.3.1 Outage logging: an outage (Redis or database down) logs one error when it starts and one `working again` (with `down_for`, `failed_tries`) when every loop works again; retries and the Redis library's own messages at debug level. Measured: a 17 s Redis outage logged 2 lines instead of ~1,400 (OBS-2)
-- [ ] 7.4 Test with several workers: total stays ≤ 100/s per channel (IMP-1); Phase 7 summary `docs/application/08-rate-limiting.md` **(next)**
+- [x] 7.4 Load test (`make loadtest`, `cmd/loadtest`, `internal/loadtest`): 3 or 5 workers against the fake provider, 1,000 notifications per channel at once; the fake measures the busiest one-second window at arrival (`GET /_stats`), the test fails above 100 (D17). Findings and fixes: provider client reuses connections (36 instead of ~200 per 600 sends); order changed to claim, then slot, then send, with `Unclaim` when there is no slot (D16 revised); 1 s deadline per Redis call; an empty queue no longer ends an outage in the logs; defaults 85/s, burst 5; Compose passes `RATE_LIMIT_*` through. Measured: busiest second 90 to 93 at the provider (IMP-1, IMP-9)
+
+**Verify:** `make loadtest` (also `make loadtest WORKERS=5`) passes: busiest second at the provider at most 100 per channel, every notification sent.
+**Summary:** `docs/application/08-rate-limiting.md`.
 
 ## Phase 8 · Retries and failure handling
-- [ ] 8.1 Classify provider errors (RET-1)
+- [ ] 8.1 Classify provider errors (RET-1) **(next)**
 - [ ] 8.2 Backoff + jitter via `next_attempt_at`; respect `Retry-After` (decide D8) (RET-2, RET-4)
 - [ ] 8.3 Max attempts → `failed` with last error (RET-3)
 - [ ] 8.4 Lease expiry recovers stuck jobs (RET-5)
@@ -101,6 +104,6 @@ Goal: the schema exists and Go code can read/write it, tested against a real Pos
 - [ ] 14 Full CI/CD: race detector, vulnerability check, image build (OPT-6)
 
 ## Phase 15 · Proof and polish
-- [ ] 15.1 Load test: burst proves the 100/s cap holds (IMP-9)
+- [x] 15.1 Load test: burst proves the 100/s cap holds (IMP-9); done early in 7.4
 - [ ] 15.2 Final README: setup, architecture, API examples (DEL-2)
 - [ ] 15.3 OpenAPI complete + Swagger UI (DEL-4)

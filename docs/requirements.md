@@ -27,7 +27,7 @@ Status values: **Done**, **Partial**, **Todo**.
 | ID | Requirement | Status | Phase | Notes |
 |---|---|---|---|---|
 | PROC-1 | Process notifications asynchronously via queue workers | Done | 6 | Worker loops claim with `FOR UPDATE SKIP LOCKED`, send, record the result |
-| PROC-2 | Rate limiting: max 100 messages/second **per channel** | Done | 7 | Shared Redis limiter (D15); every channel loop waits for a slot before claiming (D16); fail closed when Redis is down; measured: two processes held exactly the configured rate per channel |
+| PROC-2 | Rate limiting: max 100 messages/second **per channel** | Done | 7 | Shared Redis limiter (D15); loops per channel claim, then wait for a slot, then send (D16); fail closed when Redis is down; at most 100 at the provider in any one second, sending at 85/s with burst 5 (D17) |
 | PROC-3 | Priority queue support (high, normal, low) | Done | 6 | Weighted 6:3:1 with fallback (D7) |
 | PROC-4 | Content validation (character limits, required fields) | Done | 4 | D4: SMS 1,600, push 500, email 100,000 characters; recipient format per channel; all field errors returned as `400 validation_failed` |
 | PROC-5 | Idempotency support to prevent duplicate sends | Partial | 4, 8 | API level done for single and batch creates (D12: `Idempotency-Key` header, race-free via unique index); worker level (lease + dedup key) in Phase 8 |
@@ -86,7 +86,7 @@ Status values: **Done**, **Partial**, **Todo**.
 
 | ID | Requirement | Status | Phase | Notes |
 |---|---|---|---|---|
-| IMP-1 | The rate limit holds across **all** worker processes, not per worker | Partial | 7 | One Redis key per channel; tested with two limiters on separate clients: 109 to 110 sends per second together (7.1); two real worker processes held exactly 20/s per channel (7.3); load test at 100/s with `--scale worker=N` in 7.4 |
+| IMP-1 | The rate limit holds across **all** worker processes, not per worker | Done | 7 | One Redis key per channel; load test with 3 and 5 worker processes: 85/s per channel in total, busiest second 90 to 93 at the provider |
 | IMP-2 | Two workers never claim the same notification | Done | 6 | `SKIP LOCKED`; tested with 20 concurrent claimers and with two worker processes |
 | IMP-3 | Saving and enqueuing are atomic (no dual-write problem) | Done | 3, 5 | One table: inserting a row is enqueuing it; a batch is one statement, so all or none of it is saved |
 | IMP-4 | Cancel and worker claim can't both win (no race) | Done | 5 | One conditional `UPDATE`; race tested against a simulated claim |
@@ -94,4 +94,4 @@ Status values: **Done**, **Partial**, **Todo**.
 | IMP-6 | Low-priority messages are not starved forever | Done | 6 | 1 in 10 claims prefers `low` (D7) |
 | IMP-7 | Config only via environment variables; invalid config fails at startup | Done | 2 | `internal/config` |
 | IMP-8 | Batch of 1000 is inserted efficiently (one transaction, bulk insert) | Done | 5 | One `INSERT ... SELECT FROM unnest(...)` statement; 1,000 rows in about 50 ms in tests |
-| IMP-9 | Burst test proves the 100/s cap holds under load | Todo | 15 | |
+| IMP-9 | Burst test proves the 100/s cap holds under load | Done | 7 | `make loadtest`: 1,000 per channel at once on all three channels; fails if the provider gets more than 100 in any one second (D17) |

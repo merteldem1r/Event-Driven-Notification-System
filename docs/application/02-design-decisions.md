@@ -24,8 +24,9 @@
 | D12 | Idempotency key behavior | Phase 4 (create API) | Decided: see D12 below |
 | D13 | Correlation ID header and client IDs | Phase 4 (create API) | Decided: `X-Correlation-ID`, accept safe client IDs |
 | D14 | Cancel API | Phase 5 (cancel) | Decided: `POST .../{id}/cancel`, `409` when too late, repeat is `200` |
-| D15 | Rate limiter details: algorithm, burst, Redis down | Phase 7 (rate limiting) | Decided: GCRA via `redis_rate`, burst 10, fail closed |
-| D16 | When a worker asks the limiter: after or before claiming | Phase 7 (rate limiting) | Decided: loops per channel, slot before claim |
+| D15 | Rate limiter details: algorithm, burst, Redis down | Phase 7 (rate limiting) | Decided: GCRA via `redis_rate`, burst 5, fail closed |
+| D16 | When a worker asks the limiter: after or before claiming | Phase 7 (rate limiting) | Decided: loops per channel; claim, then slot, then send (revised in 7.4) |
+| D17 | What "max 100 per second" means, and the headroom | Phase 7 (load test) | Decided: at most 100 at the provider in any one second; send at 85/s, burst 5 |
 
 **Why only D1–D3 now?** They decide *what the database schema looks like, how workers are
 written, and what runs in docker-compose*. Changing them later means rewriting a lot.
@@ -326,46 +327,97 @@ D2 put the limiter in Redis. Three things were left open:
 - **Redis down.** Fail closed (don't send until Redis answers) or fail open (send without a
   limit).
 
-Chosen: **`redis_rate` (GCRA), burst 10, fail closed.** Redis stores one number per channel
-(key `rate:channel:<channel>`): the time at which the channel will be "caught up". Each send
-pushes it 10 ms further; a send is allowed while it is at most burst x 10 ms = 100 ms in the
-future. The time comes from Redis's own clock, so worker clocks don't matter. In any one second
-at most 100 + 10 sends go out. Measured with two limiters on separate clients (two processes),
-20 loops each, over one second: 109 to 110 sends in total.
+Chosen: **`redis_rate` (GCRA), fail closed**, burst first 10, then **5** after the load test
+(D17). Redis stores one number per channel (key `rate:channel:<channel>`): the time at which
+the channel will be "caught up". Each send pushes it one interval further (1 s / rate); a send
+is allowed while it is at most burst intervals in the future. The time comes from Redis's own
+clock, so worker clocks don't matter. In any one second at most rate + burst sends go out.
+Measured with two limiters on separate clients (two processes), 20 loops each, over one
+second at 100/s with burst 10: 109 to 110 sends in total.
+
+Why burst 5 and not 1: a loop asks for its slot a millisecond or two late, and with burst 1 a
+slot not taken at its moment is lost. At 90/s, burst 1 reached only 83/s; burst 5 reached 90/s.
+Each call to Redis has a 1 s deadline: Redis normally answers in about a millisecond, and a
+stopped Redis could otherwise keep a call hanging for 15 s or more.
 
 ---
 
 ## D16 — Where the worker waits for the rate limit
 
 A claim used to take the next notification of any channel. With a per-channel limit, that
-decides how one busy channel affects the others.
+decides how one busy channel affects the others, and when the slot is asked for decides how
+evenly messages reach the provider.
 
-- **A: claim, then wait for a slot, then send.** Smallest change. But a backlog on one channel
+- **A: one set of loops; claim, then wait for a slot, then send.** A backlog on one channel
   fills every loop with notifications of that channel, all waiting for its slots: 10,000 SMS
-  ahead of 10 emails keep the emails waiting ~100 s while the email limit is unused. And every
-  claim counts an attempt, so a Redis outage (claim, no slot, put back) would use up attempts
-  without sending anything.
+  ahead of 10 emails keep the emails waiting ~100 s while the email limit is unused.
 - **B: loops per channel; wait for a slot, then claim that channel, then send.** Channels are
-  independent, nothing is held while waiting, and a Redis outage claims nothing. Costs: the
-  claim filters by channel (index `(channel, priority, next_attempt_at)`), priority weighting
-  (D7) applies within each channel, and a slot taken when the channel's queue is empty is
-  unused (harmless: nobody needed it).
+  independent, nothing is held while waiting, and a Redis outage claims nothing.
+- **C: loops per channel; claim that channel, then wait for a slot, then send.** Channels are
+  independent too, and the slot is given right before the request.
 
-Chosen: **B**. `WORKER_CONCURRENCY` is now loops per channel (default 10, so 30 per process as
-before: 100/s x 0.1 s provider latency = 10). Each channel has its own dispatcher with its own
-6:3:1 pattern. The API's `/health` does not check Redis, since the API doesn't use it; the
-worker's own health and metrics endpoint (Phase 9) does.
+Chosen first (7.2, 7.3): **B**. Revised after the load test (7.4): **C**. With B, the database
+claim sits between the permission and the request; while PostgreSQL does its normal background
+work (autovacuum, checkpoints), claims stall for a moment, the limiter keeps giving slots, and
+the stalled loops then send together. At 90/s with burst 5 (at most 95 allowed per second) the
+provider saw up to 116 in one second. With C, only the HTTP request sits between permission and
+arrival: the same settings gave 95 to 96.
 
-The wait for a slot ends at the stop signal, unlike a send: a loop that is only waiting holds
-nothing, so on shutdown it takes no new notification. Measured with two worker processes at
-20/s per channel (burst 5) on 100 SMS and 100 emails: exactly 20 SMS and 20 emails per second,
-split 112 / 88 between the processes. With Redis stopped, nothing was claimed (the notification
-stayed `pending`) and it was sent as soon as Redis was back, without a restart.
+What C needs, and has:
 
-Side effect of a slot before the claim: idle loops take a slot every poll interval and find
-nothing. When the idle loops of all processes take slots faster than the rate (here 20 loops x
-2 per second = 40 > 20), the burst is used up while idle, so the first second after a quiet
-time sends the rate, not rate + burst. The limit and the throughput under load are unaffected.
+- **Loops per channel** (kept from B): `WORKER_CONCURRENCY` loops per channel (default 10, so
+  30 per process), each channel with its own dispatcher and 6:3:1 pattern (D7). The claim
+  filters by channel on the index `(channel, priority, next_attempt_at)`.
+- **No slot, no attempt:** if the slot can't be had (Redis down, 1 s deadline per call) or
+  shutdown cuts the wait off, the notification goes back with `Unclaim`, which also takes the
+  attempt off: nothing was sent. A Redis outage therefore uses up no attempts (measured: the
+  notification stayed `pending` with 0 attempts, and was sent on attempt 1 once Redis was back).
+- **Shutdown:** a claimed notification waiting for its slot is in-flight work, like a send, so
+  it finishes within the shutdown timeout; at the deadline it is put back.
+- **Idle loops take no slots:** a loop asks for a slot only once it holds a notification.
+
+The cost: a claimed notification holds its lease while it waits for its slot, a fraction of a
+second against a 60 s lease. The API's `/health` does not check Redis, since the API doesn't use
+it; the worker's own health and metrics endpoint (Phase 9) does.
+
+---
+
+## D17 — What "max 100 messages per second" means
+
+The limiter controls when a send is allowed; the provider counts when a message arrives. In
+between are the HTTP request and the network, so arrivals are never spread quite as evenly as
+the permissions: a few messages delayed by some milliseconds arrive together with later ones.
+
+- **Average and per clock second:** the easiest to meet, but a strict reader of "max 100" could
+  point at a one-second stretch with more.
+- **Never more than 100 at the provider in any one-second window, starting at any moment:**
+  the strict reading, and the only place the limit can really be judged.
+
+Chosen: **the strict reading, at the provider.** The workers aim below the limit:
+`RATE_LIMIT_PER_SECOND` 85 with burst 5, so at most 90 are allowed in any second, leaving room
+for the timing spread on the way. The fake provider measures the busiest one-second window per
+channel at arrival (`GET /_stats`), and the load test (`make loadtest`) fails if it is above
+100. Two more changes came out of the measurements:
+
+- **Connection reuse:** Go keeps only 2 idle connections per host by default, so most of the 30
+  loops opened a new connection (and, for webhook.site, a TLS handshake) for every message:
+  175 to 238 connections per 600 sends. The provider client now keeps up to 1,000: 36 to 38.
+- **Order C of D16**, which removed the largest source of spread (database pauses).
+
+Measured, 1,000 notifications per channel at once on all three channels (busiest second at the
+provider):
+
+| Settings (order) | Workers | Busiest second | Average |
+|---|---|---|---|
+| 100/s, burst 10 (B, 2 connections) | 3 | 119 to 122 | 100/s |
+| 90/s, burst 5 (B) | 3 | 96 to 116 | 90/s |
+| 90/s, burst 5 (C) | 3 | 95 to 96 | 90/s |
+| 90/s, burst 5 (C) | 5 | 97 to 103 | 90/s |
+| **85/s, burst 5 (C)** | **3** | **90 to 91** | **85/s** |
+| **85/s, burst 5 (C)** | **5** | **91 to 93** | **85/s** |
+
+The cost is about 15% of the top speed: 85 instead of 100 per second per channel. On a real
+provider the margin may be tuned with `RATE_LIMIT_PER_SECOND` once its own counting is known.
 
 ---
 
@@ -407,7 +459,8 @@ time sends the rate, not rate + burst. The limit and the throughput under load a
 | D13 | Correlation ID | **`X-Correlation-ID` header**; a client ID of 1 to 128 characters `[A-Za-z0-9._:-]` is kept, anything else (missing, unsafe, too long) is replaced by a new UUID, never rejected; returned on every response, added to every log line through a slog handler wrapper, stored on the notification for the worker | One search finds every log line of a request, later across API and worker; the client's own ID links our logs to theirs; validation keeps log lines clean | W3C `traceparent` (comes with tracing, Phase 13) | 2026-11-20 |
 | D14 | Cancel | **`POST /api/v1/notifications/{id}/cancel`** → `200` with the notification; one conditional `UPDATE ... WHERE id = $1 AND status = 'pending'`; past pending → **`409 not_cancellable`** naming the status; already cancelled → **`200`** (safe to retry); the row is kept as `cancelled`; **batch cancel** `POST /api/v1/batches/{id}/cancel` cancels what is still pending and returns `cancelled` plus the counts, `0` is not an error | The check and the change are one statement, so cancel and a worker claim can't both win (tested: 200 races, and 50 over HTTP); an explicit action URL, since nothing is deleted; clients learn why a cancel came too late | Cancelling a notification that is already with the provider | 2026-11-20 |
 | D7 | Priority | **Weighted 6:3:1** with fallback: of every 10 claims 6 prefer `high`, 3 `normal`, 1 `low`; an empty preferred queue falls back to the others (high to low); claims use `FOR UPDATE SKIP LOCKED` per priority | `low` always moves (IMP-6); simple, predictable rule; full capacity is used whatever is waiting; weights are easy to tune | During a `high` burst, `high` gets ~60% of throughput instead of 100% | 2026-11-20 |
-| D15 | Rate limiter details | **`go-redis/redis_rate` (GCRA in one Lua script), one key per channel, 100/s with burst 10, fail closed**; `Wait` sleeps for the time Redis says the next slot opens, then asks again; settings `RATE_LIMIT_PER_SECOND`, `RATE_LIMIT_BURST` | Atomic and correct across processes; Redis's clock, not the workers'; a small burst keeps every one-second window near 100 while idle loops don't wait; never exceeding the provider's limit matters more than sending during a Redis outage | Own algorithm code; sending while Redis is down; up to 10 extra sends in the first second after a quiet moment | 2026-11-20 |
-| D16 | Worker and rate limit | **Loops per channel; wait for a slot, then claim that channel, then send**; `WORKER_CONCURRENCY` = loops per channel (default 10); claim filtered by channel on index `(channel, priority, next_attempt_at)`; Redis health on the worker (Phase 9), not the API | A backlog on one channel never holds up the others; no lease held while waiting; a Redis outage claims nothing and uses no attempts | Priority across channels (D7 now works within a channel); a few unused slots when a channel's queue is empty; a new index | 2026-11-20 |
+| D15 | Rate limiter details | **`go-redis/redis_rate` (GCRA in one Lua script), one key per channel, burst 5, fail closed**; `Wait` sleeps for the time Redis says the next slot opens, then asks again; each Redis call has a 1 s deadline; settings `RATE_LIMIT_PER_SECOND`, `RATE_LIMIT_BURST` | Atomic and correct across processes; Redis's clock, not the workers'; burst 5 absorbs loops being a little late for their slot (burst 1 lost ~10% of the slots); never exceeding the provider's limit matters more than sending during a Redis outage | Own algorithm code; sending while Redis is down; up to 5 extra sends in the first second after a quiet moment | 2026-11-20 |
+| D16 | Worker and rate limit | **Loops per channel; claim that channel, then wait for a slot, then send** (first slot-before-claim, revised after the load test); `WORKER_CONCURRENCY` = loops per channel (default 10); claim filtered by channel on index `(channel, priority, next_attempt_at)`; no slot or shutdown during the wait → `Unclaim` (back to `pending`, attempt not counted); Redis health on the worker (Phase 9), not the API | A backlog on one channel never holds up the others; nothing slow (database pauses) between permission and request, so arrivals stay even; a Redis outage uses no attempts; idle loops take no slots | Priority across channels (D7 works within a channel); a claimed notification holds its lease while waiting for its slot (a fraction of a second); a new index | 2026-11-20 |
+| D17 | Meaning of "max 100/s" | **At most 100 per channel at the provider in any one-second window**; workers send at **85/s with burst 5** (at most 90 allowed); provider client keeps up to 1,000 idle connections; the fake provider measures the busiest window at arrival (`GET /_stats`) and `make loadtest` fails above 100 | The strict reading, judged where it matters; measured 90 to 93 with 3 and 5 workers | About 15% of the top speed (85 instead of 100 per second per channel) | 2026-11-20 |
 | D9 | Provider | **webhook.site only, for now**: the worker sends to `PROVIDER_URL` (your own webhook.site URL, set to answer `202 {messageId, status, timestamp}`); an own local fake provider is noted in the plan as an optional later step | Exactly the integration the requirements ask for; less code now; every send is visible in the browser | Offline runs; load tests beyond webhook.site's free request limit; a provider that fails or slows down on purpose for retry tests (until the fake is added) | 2026-11-20 |
 | D9 (revised) | Provider | **Own fake provider by default** (`cmd/fakeprovider`, `internal/fakeprovider`): answers `POST` on any path like webhook.site with `202 {messageId, status, timestamp}`; `FAKE_PROVIDER_LATENCY` (default 50ms) and `FAKE_PROVIDER_FAILURE_RATE` (share answered `503`); logs the messages received per channel each second; a Compose service the worker uses unless `PROVIDER_URL` is set (e.g. to webhook.site in `.env`) | Load tests at 100/s per channel without webhook.site's free request limit; provider failures on demand for Phase 8; works offline; the per-second report measures the rate limit | A second, simpler provider than the real one (no `429`, no `Retry-After` yet; added when Phase 8 needs them) | 2026-11-20 |
