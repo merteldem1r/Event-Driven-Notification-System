@@ -36,7 +36,8 @@ It is a **simulation**, not the running service. To run the real system, see the
   Redis down, killing or adding a worker, and steady background traffic.
 - **Settings**: the service's own settings, named after the environment variables
   (`WORKER_CONCURRENCY`, `RATE_LIMIT_PER_SECOND`, `RETRY_BASE_DELAY`, ...). Changing them shows
-  why the defaults were chosen.
+  why the defaults were chosen. The info button next to each one (hover, or click to keep it
+  open) says what it does, why the default is what it is, and something to try.
 - **Inspect**: one notification's fields and its history, step by step.
 - **Charts**: arrivals at the provider per second (the rate-limit proof) and rows waiting in the
   queue (the burst being absorbed).

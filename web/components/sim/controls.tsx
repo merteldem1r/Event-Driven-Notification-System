@@ -2,10 +2,11 @@
 
 // The side panel: scenarios to throw at the system, its settings, and one notification's story.
 
-import { Boxes, Clock, Flame, Plus, RotateCcw, Send, Skull, XCircle } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { Boxes, Clock, Flame, Info, Plus, RotateCcw, Send, Skull, XCircle } from "lucide-react";
+import { useRef, useState, type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
@@ -16,7 +17,7 @@ import { cn } from "@/lib/utils";
 import { fmtMs, type Notification, type Status } from "@/lib/sim/engine";
 import { useShallow } from "zustand/react/shallow";
 import { useSim, type PanelTab } from "@/lib/sim/store";
-import { CHANNELS, PRIORITIES, type Channel, type Priority, type SimConfig } from "@/lib/sim/rules";
+import { CHANNELS, DEFAULT_CONFIG, PRIORITIES, type Channel, type Priority, type SimConfig } from "@/lib/sim/rules";
 import { CHANNEL_LABEL, ChannelTag, PRIORITY_LABEL, clock } from "./shared";
 
 export function ControlPanel() {
@@ -226,24 +227,167 @@ function SliderRow({
   );
 }
 
-// Each setting is the environment variable the Go service reads.
-const SETTINGS: {
+interface Explained {
+  what: string; // what the setting is and how it works
+  why: string; // why the default is what it is
+  tryIt: string; // something to change and watch
+}
+
+// Each setting is the environment variable the Go service reads, with what it means.
+const SETTINGS: ({
   key: keyof SimConfig;
   env: string;
   min: number;
   max: number;
   step: number;
   format: (v: number) => string;
-}[] = [
-  { key: "workers", env: "docker compose --scale worker", min: 0, max: 4, step: 1, format: String },
-  { key: "loopsPerChannel", env: "WORKER_CONCURRENCY", min: 1, max: 20, step: 1, format: String },
-  { key: "ratePerSecond", env: "RATE_LIMIT_PER_SECOND", min: 5, max: 150, step: 5, format: (v) => `${v}/s` },
-  { key: "burst", env: "RATE_LIMIT_BURST", min: 1, max: 30, step: 1, format: String },
-  { key: "providerLatencyMs", env: "FAKE_PROVIDER_LATENCY", min: 10, max: 3000, step: 10, format: fmtMs },
-  { key: "retryMaxAttempts", env: "RETRY_MAX_ATTEMPTS", min: 1, max: 10, step: 1, format: String },
-  { key: "retryBaseMs", env: "RETRY_BASE_DELAY", min: 1000, max: 30_000, step: 1000, format: fmtMs },
-  { key: "leaseMs", env: "WORKER_LEASE_DURATION", min: 10_000, max: 120_000, step: 5000, format: fmtMs },
+} & Explained)[] = [
+  {
+    key: "workers",
+    env: "docker compose --scale worker",
+    min: 0,
+    max: 4,
+    step: 1,
+    format: String,
+    what: "How many worker processes run. Each claims rows on its own; SKIP LOCKED keeps two of them off the same row. They share one rate limit through Redis.",
+    why: "More workers do not send faster than the rate limit; they add room for slow sends and survive a crash.",
+    tryIt: "Set 4 during a burst: the arrivals chart still stays at 85/s. Set 0: rows wait in the queue and nothing is lost.",
+  },
+  {
+    key: "loopsPerChannel",
+    env: "WORKER_CONCURRENCY",
+    min: 1,
+    max: 20,
+    step: 1,
+    format: String,
+    what: "Loops per channel in each worker. A loop handles one notification at a time: claim, wait for a slot, send. Each square on a worker is one loop.",
+    why: "A loop is busy for the whole send, so the rate needs about rate x latency loops: 85/s x 50 ms is about 4. Ten leaves room for a slower provider.",
+    tryIt: "Set the provider latency to 1s: each loop sends once a second, so a worker manages about 10/s. Raise this to 20 and add workers: the rate climbs back toward 85.",
+  },
+  {
+    key: "ratePerSecond",
+    env: "RATE_LIMIT_PER_SECOND",
+    min: 5,
+    max: 150,
+    step: 5,
+    format: (v) => `${v}/s`,
+    what: "Sends allowed per second per channel, for all workers together. Redis keeps the count (GCRA), so adding workers does not raise it.",
+    why: "The provider allows 100 per second. 85 plus a burst of 5 means no second ever holds more than 90.",
+    tryIt: "Set 150 and send a burst: the busiest second passes 100 and the warning below appears.",
+  },
+  {
+    key: "burst",
+    env: "RATE_LIMIT_BURST",
+    min: 1,
+    max: 30,
+    step: 1,
+    format: String,
+    what: "How many sends may go at once after a quiet moment, on top of the steady rate. The Redis box shows these slots per channel.",
+    why: "A small burst covers loops that are a moment late for their slot; with 1, about 10% of the slots were lost. 5 keeps rate + burst at 90, under 100.",
+    tryIt: "Set 30, wait for a quiet moment, then send a burst: the first second jumps above the steady rate.",
+  },
+  {
+    key: "providerLatencyMs",
+    env: "FAKE_PROVIDER_LATENCY",
+    min: 10,
+    max: 3000,
+    step: 10,
+    format: fmtMs,
+    what: "How long the fake provider takes to answer one request. The loop that sent it waits the whole time.",
+    why: "Real providers answer in tens of milliseconds; 50 ms is a fair middle.",
+    tryIt: "Set 1.5s: every square on the worker fills (all loops sending) and the arrival rate drops.",
+  },
+  {
+    key: "retryMaxAttempts",
+    env: "RETRY_MAX_ATTEMPTS",
+    min: 1,
+    max: 10,
+    step: 1,
+    format: String,
+    what: "How many times a notification is tried in total before it fails for good. Only temporary errors are retried (503, 429, timeouts); a 400 fails at once.",
+    why: "Five tries, with waits of roughly 10, 20, 40 and 80 s between them, ride out a few minutes of provider trouble without retrying forever.",
+    tryIt: "In Scenarios, make the provider answer 503 half the time. With 1 attempt many fail; with 10 almost all get through, later.",
+  },
+  {
+    key: "retryBaseMs",
+    env: "RETRY_BASE_DELAY",
+    min: 1000,
+    max: 30_000,
+    step: 1000,
+    format: fmtMs,
+    what: "The wait before the first retry. It doubles with each attempt, up to 10 minutes, with some randomness so retries do not all come back at the same moment.",
+    why: "10 s gives a struggling provider time to recover; the waits then grow to roughly 20, 40 and 80 s.",
+    tryIt: "Set 1s with 503s at 50% (Scenarios): retries come back quickly and compete with new notifications for the same slots.",
+  },
+  {
+    key: "leaseMs",
+    env: "WORKER_LEASE_DURATION",
+    min: 10_000,
+    max: 120_000,
+    step: 5000,
+    format: fmtMs,
+    what: "How long a worker may hold a claimed row. If the worker dies, a sweep every 10 s takes the row back once its lease is over, and it is sent again.",
+    why: "60 s is far longer than any send, so a slow send is never taken from a worker that is still alive.",
+    tryIt: "With 2 workers, a slow provider and 5x speed, kill one: after the lease the other worker's sweep takes its rows back and \"leases recovered\" goes up.",
+  },
 ];
+
+// InfoButton explains a setting: hover opens it with a mouse, a click or tap keeps it open.
+function InfoButton({ title, info, fallback }: { title: string; info: Explained; fallback: string }) {
+  const [open, setOpen] = useState(false);
+  const [pinned, setPinned] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const hover = (show: boolean) => (e: React.PointerEvent) => {
+    if (e.pointerType !== "mouse" || pinned) return;
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => setOpen(show), show ? 120 : 200); // a short delay lets the pointer reach the card
+  };
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(v) => {
+        setOpen(v);
+        if (!v) setPinned(false);
+      }}
+    >
+      <PopoverTrigger asChild>
+        <button
+          aria-label={`What ${title} does`}
+          onPointerEnter={hover(true)}
+          onPointerLeave={hover(false)}
+          onClick={(e) => {
+            e.preventDefault(); // decide here instead of the default toggle: a click pins an open card
+            const close = open && pinned;
+            setOpen(!close);
+            setPinned(!close);
+          }}
+          className="rounded-full text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        >
+          <Info className="size-3.5" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        side={innerWidth < 640 ? "bottom" : "left"} // phones have no room beside the panel
+        collisionPadding={12}
+        onPointerEnter={hover(true)}
+        onPointerLeave={hover(false)}
+        onOpenAutoFocus={(e) => e.preventDefault()} // reading it should not move the keyboard focus
+        align="start"
+        className="w-[min(20rem,calc(100vw-24px))] gap-2 text-xs leading-relaxed"
+      >
+        <div className="font-mono text-[11px] font-semibold">{title}</div>
+        <p>{info.what}</p>
+        <p className="text-muted-foreground">
+          <span className="font-medium text-foreground">Default {fallback}.</span> {info.why}
+        </p>
+        <p className="rounded-md bg-muted px-2 py-1.5">
+          <span className="font-medium">Try: </span>
+          {info.tryIt}
+        </p>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 function Settings() {
   const config = useSim((s) => s.sim.config);
@@ -252,12 +396,16 @@ function Settings() {
   return (
     <div className="space-y-5">
       <p className="text-xs leading-snug text-muted-foreground">
-        The defaults are the service&apos;s own (internal/config). Changing them shows why they were chosen.
+        The defaults are the service&apos;s own (internal/config). Changing them shows why they were chosen. The{" "}
+        <Info className="inline size-3 align-[-1px]" /> next to each one explains it.
       </p>
       {SETTINGS.map((st) => (
         <div key={st.key} className="space-y-2">
-          <div className="flex items-center justify-between text-sm">
-            <span className="font-mono text-xs">{st.env}</span>
+          <div className="flex items-center justify-between gap-2 text-sm">
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate font-mono text-xs">{st.env}</span>
+              <InfoButton title={st.env} info={st} fallback={st.format(DEFAULT_CONFIG[st.key])} />
+            </span>
             <span className="font-mono text-xs tabular-nums">{st.format(config[st.key])}</span>
           </div>
           <Slider value={[config[st.key]]} min={st.min} max={st.max} step={st.step} onValueChange={([v]) => setConfig({ [st.key]: v })} />

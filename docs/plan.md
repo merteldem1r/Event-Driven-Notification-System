@@ -158,6 +158,8 @@ them, and each notification's story. Runs in the browser, deployable on Vercel.
   to each block, three steps that act (burst, Redis down, one notification); starts on the first
   visit, replayed from the Tour button or `/?tour=1`; keys and phones; tested step by step in
   Chrome, 60 fps with the blur on during a burst
+- [x] 16.1d Settings explained: an info button on each setting (hover, or click to keep it open)
+  with what it does, why the default, and something to try
 - [ ] 16.2 Deploy to Vercel (root directory `web/`) and link the page from the README **(next)**
 - [ ] 16.3 Improvements after a first look (templates in the model, more scenarios)
 
