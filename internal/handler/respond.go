@@ -19,6 +19,7 @@ const (
 	codeNotFound         = "not_found"
 	codeKeyReused        = "idempotency_key_reused"
 	codeNotCancellable   = "not_cancellable"
+	codeTemplateExists   = "template_exists"
 	codeRouteNotFound    = "route_not_found"
 	codeMethodNotAllowed = "method_not_allowed"
 	codeInternal         = "internal_error"
@@ -76,6 +77,12 @@ func writeServiceError(w http.ResponseWriter, r *http.Request, logger *slog.Logg
 	if errors.As(err, &nc) {
 		writeError(w, http.StatusConflict, codeNotCancellable, fmt.Sprintf(
 			"the notification is %s and can no longer be cancelled; only pending notifications can", nc.Status))
+		return
+	}
+
+	if errors.Is(err, domain.ErrTemplateExists) {
+		writeError(w, http.StatusConflict, codeTemplateExists,
+			"a template with this name already exists; templates never change, so use a new name")
 		return
 	}
 

@@ -57,7 +57,9 @@ func run() error {
 
 	// Wire the layers: repository -> service -> HTTP handlers.
 	repo := repository.NewNotifications(db)
-	notifications := service.NewNotifications(repo)
+	templateRepo := repository.NewTemplates(db)
+	notifications := service.NewNotifications(repo, templateRepo)
+	templates := service.NewTemplates(templateRepo)
 
 	// Metrics at /metrics: HTTP requests, the queue (counted in the database), Go runtime (D20).
 	reg := metrics.NewRegistry()
@@ -65,7 +67,7 @@ func run() error {
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.HTTPPort),
-		Handler: handler.NewRouter(logger, db, notifications, reg),
+		Handler: handler.NewRouter(logger, db, notifications, templates, reg),
 		// Protect against slow or stuck clients.
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,

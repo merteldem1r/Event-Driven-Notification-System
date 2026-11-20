@@ -78,6 +78,8 @@ func bodyErrorMessage(err error) string {
 		return fmt.Sprintf("malformed JSON at position %d", syntaxErr.Offset)
 	case errors.Is(err, io.ErrUnexpectedEOF):
 		return "malformed JSON"
+	case errors.As(err, &typeErr) && strings.HasSuffix(typeErr.Field, "variables"): // the map, not the key, is named
+		return `field "variables" must be an object of strings, e.g. {"order_id":"1042"}`
 	case errors.As(err, &typeErr) && typeErr.Field != "":
 		return fmt.Sprintf("field %q must be a %s", typeErr.Field, typeErr.Type)
 	case strings.HasPrefix(err.Error(), "json: unknown field "):

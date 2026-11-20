@@ -94,6 +94,9 @@ type Notification struct {
 
 	ScheduledAt *time.Time // send at this time instead of as soon as possible; nil means now
 
+	Template  *string           // the template Content was made from, if any (D22)
+	Variables map[string]string // request only: values for the template's placeholders; not stored
+
 	Status            Status
 	Attempts          int
 	NextAttemptAt     time.Time
@@ -305,7 +308,16 @@ func (n Notification) SameRequest(other Notification) bool {
 		n.Recipient == other.Recipient &&
 		n.Content == other.Content &&
 		n.Priority == other.Priority &&
-		sameTime(n.ScheduledAt, other.ScheduledAt)
+		sameTime(n.ScheduledAt, other.ScheduledAt) &&
+		sameString(n.Template, other.Template)
+}
+
+// sameString compares optional strings.
+func sameString(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 // sameTime compares optional times to the microsecond, the precision PostgreSQL stores.

@@ -17,7 +17,7 @@ import (
 
 // notificationColumns is the column list every query returns, in scanNotification order.
 const notificationColumns = `id, batch_id, idempotency_key, correlation_id,
-	channel, recipient, content, priority, scheduled_at,
+	channel, recipient, content, priority, scheduled_at, template,
 	status, attempts, next_attempt_at, last_error, provider_message_id,
 	created_at, updated_at`
 
@@ -42,12 +42,12 @@ func (r *Notifications) Create(ctx context.Context, n domain.Notification) (doma
 	row := r.db.QueryRow(ctx, `
 		INSERT INTO notifications
 			(batch_id, idempotency_key, correlation_id, channel, recipient, content, priority,
-			 scheduled_at, next_attempt_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($8, now()))
+			 scheduled_at, template, next_attempt_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($8, now()))
 		ON CONFLICT (idempotency_key) DO NOTHING
 		RETURNING `+notificationColumns,
 		n.BatchID, n.IdempotencyKey, n.CorrelationID, n.Channel, n.Recipient, n.Content, n.Priority,
-		n.ScheduledAt,
+		n.ScheduledAt, n.Template,
 	)
 
 	created, err := scanNotification(row)
@@ -75,6 +75,7 @@ func (r *Notifications) CreateBatch(ctx context.Context, ns []domain.Notificatio
 	contents := make([]string, len(ns))
 	priorities := make([]int16, len(ns))
 	scheduled := make([]pgtype.Timestamptz, len(ns))
+	templates := make([]pgtype.Text, len(ns))
 	for i, n := range ns {
 		ids[i] = uuid.New()
 		if n.IdempotencyKey != nil {
@@ -89,6 +90,9 @@ func (r *Notifications) CreateBatch(ctx context.Context, ns []domain.Notificatio
 		if n.ScheduledAt != nil {
 			scheduled[i] = pgtype.Timestamptz{Time: *n.ScheduledAt, Valid: true}
 		}
+		if n.Template != nil {
+			templates[i] = pgtype.Text{String: *n.Template, Valid: true}
+		}
 		channels[i], recipients[i], contents[i], priorities[i] = string(n.Channel), n.Recipient, n.Content, int16(n.Priority)
 	}
 
@@ -102,14 +106,14 @@ func (r *Notifications) CreateBatch(ctx context.Context, ns []domain.Notificatio
 	// ON CONFLICT skips rows whose key is taken; a concurrent same-key batch waits here for ours.
 	rows, err := tx.Query(ctx, `
 		INSERT INTO notifications (id, idempotency_key, batch_id, correlation_id, channel, recipient, content, priority,
-			scheduled_at, next_attempt_at)
+			scheduled_at, template, next_attempt_at)
 		SELECT u.*, COALESCE(u.scheduled_at, now())
 		FROM unnest($1::uuid[], $2::text[], $3::uuid[], $4::text[], $5::text[], $6::text[], $7::text[], $8::smallint[],
-			$9::timestamptz[]) AS u(id, idempotency_key, batch_id, correlation_id, channel, recipient, content, priority,
-			scheduled_at)
+			$9::timestamptz[], $10::text[]) AS u(id, idempotency_key, batch_id, correlation_id, channel, recipient,
+			content, priority, scheduled_at, template)
 		ON CONFLICT (idempotency_key) DO NOTHING
 		RETURNING `+notificationColumns,
-		ids, keys, batchIDs, correlationIDs, channels, recipients, contents, priorities, scheduled,
+		ids, keys, batchIDs, correlationIDs, channels, recipients, contents, priorities, scheduled, templates,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("insert batch: %w", err)
@@ -452,7 +456,7 @@ func scanNotification(row pgx.Row) (domain.Notification, error) {
 	var n domain.Notification
 	err := row.Scan(
 		&n.ID, &n.BatchID, &n.IdempotencyKey, &n.CorrelationID,
-		&n.Channel, &n.Recipient, &n.Content, &n.Priority, &n.ScheduledAt,
+		&n.Channel, &n.Recipient, &n.Content, &n.Priority, &n.ScheduledAt, &n.Template,
 		&n.Status, &n.Attempts, &n.NextAttemptAt, &n.LastError, &n.ProviderMessageID,
 		&n.CreatedAt, &n.UpdatedAt,
 	)

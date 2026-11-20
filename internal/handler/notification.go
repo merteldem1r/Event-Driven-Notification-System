@@ -33,8 +33,11 @@ const (
 type createNotificationRequest struct {
 	Channel   string `json:"channel"`
 	Recipient string `json:"recipient"`
-	Content   string `json:"content"`
+	Content   string `json:"content"`  // or template and variables instead (D22)
 	Priority  string `json:"priority"` // optional: high, normal (default) or low
+
+	Template  string            `json:"template"`  // optional: a template's name
+	Variables map[string]string `json:"variables"` // values for the template's placeholders
 
 	ScheduledAt *scheduleTime `json:"scheduled_at"` // optional: send at this time (D21)
 }
@@ -51,12 +54,18 @@ func (req createNotificationRequest) toDomain() domain.Notification {
 		t := req.ScheduledAt.Time
 		scheduledAt = &t
 	}
+	var template *string
+	if req.Template != "" {
+		template = &req.Template
+	}
 	return domain.Notification{
 		Channel:     domain.Channel(req.Channel),
 		Recipient:   req.Recipient,
 		Content:     req.Content,
 		Priority:    priority,
 		ScheduledAt: scheduledAt,
+		Template:    template,
+		Variables:   req.Variables,
 	}
 }
 
@@ -132,6 +141,7 @@ type notificationResponse struct {
 	Status            string     `json:"status"`
 	Attempts          int        `json:"attempts"`
 	ScheduledAt       *time.Time `json:"scheduled_at,omitempty"`
+	Template          *string    `json:"template,omitempty"` // the template the content was made from
 	LastError         *string    `json:"last_error,omitempty"`
 	NextAttemptAt     *time.Time `json:"next_attempt_at,omitempty"` // only while a retry is waiting
 	ProviderMessageID *string    `json:"provider_message_id,omitempty"`
@@ -156,6 +166,7 @@ func toNotificationResponse(n domain.Notification) notificationResponse {
 		Status:            string(n.Status),
 		Attempts:          n.Attempts,
 		ScheduledAt:       utc(n.ScheduledAt),
+		Template:          n.Template,
 		LastError:         n.LastError,
 		NextAttemptAt:     next,
 		ProviderMessageID: n.ProviderMessageID,

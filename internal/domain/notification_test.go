@@ -165,6 +165,8 @@ func TestSameRequest(t *testing.T) {
 		{"different content", func(n *Notification) { n.Content = "goodbye" }, false},
 		{"different priority", func(n *Notification) { n.Priority = PriorityHigh }, false},
 		{"scheduled vs not", func(n *Notification) { n.ScheduledAt = ptr(testNow) }, false},
+		{"from a template vs not", func(n *Notification) { n.Template = ptr("welcome") }, false},
+		{"variables are ignored: content is compared", func(n *Notification) { n.Variables = map[string]string{"a": "b"} }, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

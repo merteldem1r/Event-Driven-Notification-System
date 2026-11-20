@@ -12,7 +12,7 @@ import (
 
 // Requests are counted per route pattern, not per URL, and /metrics serves them (OBS-1).
 func TestRequestMetrics(t *testing.T) {
-	router := NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, &fakeNotificationService{}, prometheus.NewRegistry())
+	router := NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, &fakeNotificationService{}, nil, prometheus.NewRegistry())
 	get := func(path string) *httptest.ResponseRecorder {
 		t.Helper()
 		rec := httptest.NewRecorder()
@@ -50,7 +50,7 @@ func TestRequestMetrics(t *testing.T) {
 // Without a registry (tests, or metrics not wanted) there is no /metrics route.
 func TestNoMetricsWithoutRegistry(t *testing.T) {
 	rec := httptest.NewRecorder()
-	NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, nil, nil).
+	NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, nil, nil, nil).
 		ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", nil))
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("GET /metrics without a registry = %d, want 404", rec.Code)

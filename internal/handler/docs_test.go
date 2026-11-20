@@ -17,7 +17,7 @@ func TestOpenAPISpec_ServesTheFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
-	NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, nil, nil).
+	NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, nil, nil, nil).
 		ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/openapi.yaml", nil))
 	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/yaml" {
 		t.Fatalf("GET /openapi.yaml = %d %q, want 200 application/yaml", rec.Code, rec.Header().Get("Content-Type"))
@@ -30,7 +30,7 @@ func TestOpenAPISpec_ServesTheFile(t *testing.T) {
 // /docs is the Swagger UI page: the pinned version, integrity hashes, and our spec.
 func TestSwaggerUI(t *testing.T) {
 	rec := httptest.NewRecorder()
-	NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, nil, nil).
+	NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, nil, nil, nil).
 		ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/docs", nil))
 	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/html") {
 		t.Fatalf("GET /docs = %d %q, want 200 text/html", rec.Code, rec.Header().Get("Content-Type"))

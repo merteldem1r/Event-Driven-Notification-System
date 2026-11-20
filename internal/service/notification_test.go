@@ -141,7 +141,7 @@ func validNotification() domain.Notification {
 func TestCreate_SavesValidNotification(t *testing.T) {
 	store := &fakeStore{}
 
-	created, replayed, err := NewNotifications(store).Create(t.Context(), validNotification())
+	created, replayed, err := NewNotifications(store, &fakeTemplateStore{}).Create(t.Context(), validNotification())
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestCreate_RejectsInvalidWithoutSaving(t *testing.T) {
 	n := validNotification()
 	n.Recipient = ""
 
-	_, _, err := NewNotifications(store).Create(t.Context(), n)
+	_, _, err := NewNotifications(store, &fakeTemplateStore{}).Create(t.Context(), n)
 
 	var ve *domain.ValidationError
 	if !errors.As(err, &ve) {
@@ -175,21 +175,21 @@ func TestCreate_RejectsInvalidWithoutSaving(t *testing.T) {
 func TestCreate_WrapsStoreError(t *testing.T) {
 	storeErr := errors.New("connection refused")
 
-	_, _, err := NewNotifications(&fakeStore{err: storeErr}).Create(t.Context(), validNotification())
+	_, _, err := NewNotifications(&fakeStore{err: storeErr}, &fakeTemplateStore{}).Create(t.Context(), validNotification())
 	if !errors.Is(err, storeErr) {
 		t.Errorf("err = %v, want it to wrap %v", err, storeErr)
 	}
 }
 
 func TestGet(t *testing.T) {
-	svc := NewNotifications(&fakeStore{})
+	svc := NewNotifications(&fakeStore{}, &fakeTemplateStore{})
 	created, _, err := svc.Create(t.Context(), validNotification())
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
 	got, err := svc.Get(t.Context(), created.ID)
-	if err != nil || got != created {
+	if err != nil || !reflect.DeepEqual(got, created) {
 		t.Errorf("Get = %+v, %v; want %+v", got, err, created)
 	}
 
@@ -206,7 +206,7 @@ func withKey(key string) domain.Notification {
 
 func TestCreate_IdempotencyKeyReplay(t *testing.T) {
 	store := &fakeStore{}
-	svc := NewNotifications(store)
+	svc := NewNotifications(store, &fakeTemplateStore{})
 
 	first, replayed, err := svc.Create(t.Context(), withKey("order-1042"))
 	if err != nil || replayed {
@@ -227,7 +227,7 @@ func TestCreate_IdempotencyKeyReplay(t *testing.T) {
 }
 
 func TestCreate_IdempotencyKeyReusedForDifferentRequest(t *testing.T) {
-	svc := NewNotifications(&fakeStore{})
+	svc := NewNotifications(&fakeStore{}, &fakeTemplateStore{})
 	if _, _, err := svc.Create(t.Context(), withKey("order-1042")); err != nil {
 		t.Fatalf("first Create: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestCreate_IdempotencyKeyReusedForDifferentRequest(t *testing.T) {
 
 func TestCreate_DifferentKeysAreDifferentNotifications(t *testing.T) {
 	store := &fakeStore{}
-	svc := NewNotifications(store)
+	svc := NewNotifications(store, &fakeTemplateStore{})
 	for _, key := range []string{"order-1042", "order-1043"} {
 		if _, replayed, err := svc.Create(t.Context(), withKey(key)); err != nil || replayed {
 			t.Fatalf("Create(%s) = replayed %v, err %v", key, replayed, err)
@@ -256,7 +256,7 @@ func TestCreateBatch_SavesAllUnderOneBatchID(t *testing.T) {
 	store := &fakeStore{}
 	in := []domain.Notification{validNotification(), validNotification(), validNotification()}
 
-	batch, replayed, err := NewNotifications(store).CreateBatch(t.Context(), in, nil)
+	batch, replayed, err := NewNotifications(store, &fakeTemplateStore{}).CreateBatch(t.Context(), in, nil)
 	if err != nil || replayed {
 		t.Fatalf("CreateBatch = replayed %v, err %v; want a new batch", replayed, err)
 	}
@@ -280,7 +280,7 @@ func TestCreateBatch_AllOrNothing(t *testing.T) {
 	bad := validNotification()
 	bad.Recipient = ""
 
-	_, _, err := NewNotifications(store).CreateBatch(t.Context(), []domain.Notification{validNotification(), bad}, nil)
+	_, _, err := NewNotifications(store, &fakeTemplateStore{}).CreateBatch(t.Context(), []domain.Notification{validNotification(), bad}, nil)
 
 	var ve *domain.ValidationError
 	if !errors.As(err, &ve) || ve.Fields[0].Field != "notifications[1].recipient" {
@@ -297,7 +297,7 @@ func threeItems() []domain.Notification {
 
 func TestCreateBatch_IdempotencyKeyReplay(t *testing.T) {
 	store := &fakeStore{}
-	svc := NewNotifications(store)
+	svc := NewNotifications(store, &fakeTemplateStore{})
 	key := "campaign-7"
 
 	first, replayed, err := svc.CreateBatch(t.Context(), threeItems(), &key)
@@ -334,7 +334,7 @@ func TestCreateBatch_IdempotencyKeyReused(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc := NewNotifications(&fakeStore{})
+			svc := NewNotifications(&fakeStore{}, &fakeTemplateStore{})
 			key := "campaign-7"
 			if _, _, err := svc.CreateBatch(t.Context(), threeItems(), &key); err != nil {
 				t.Fatalf("first CreateBatch: %v", err)
@@ -347,7 +347,7 @@ func TestCreateBatch_IdempotencyKeyReused(t *testing.T) {
 }
 
 func TestGetBatch(t *testing.T) {
-	svc := NewNotifications(&fakeStore{})
+	svc := NewNotifications(&fakeStore{}, &fakeTemplateStore{})
 	batch, _, err := svc.CreateBatch(t.Context(), threeItems(), nil)
 	if err != nil {
 		t.Fatalf("CreateBatch: %v", err)
@@ -364,7 +364,7 @@ func TestGetBatch(t *testing.T) {
 
 func TestList(t *testing.T) {
 	store := &fakeStore{}
-	svc := NewNotifications(store)
+	svc := NewNotifications(store, &fakeTemplateStore{})
 
 	if _, err := svc.List(t.Context(), domain.ListFilter{Limit: domain.DefaultListLimit}); err != nil {
 		t.Fatalf("List: %v", err)
@@ -389,7 +389,7 @@ func TestCancel(t *testing.T) {
 
 	t.Run("pending is cancelled", func(t *testing.T) {
 		store, id := saved(domain.StatusPending)
-		n, err := NewNotifications(store).Cancel(t.Context(), id)
+		n, err := NewNotifications(store, &fakeTemplateStore{}).Cancel(t.Context(), id)
 		if err != nil || n.Status != domain.StatusCancelled {
 			t.Errorf("got %s, %v; want cancelled", n.Status, err)
 		}
@@ -397,7 +397,7 @@ func TestCancel(t *testing.T) {
 
 	t.Run("already cancelled is returned unchanged", func(t *testing.T) {
 		store, id := saved(domain.StatusCancelled)
-		n, err := NewNotifications(store).Cancel(t.Context(), id)
+		n, err := NewNotifications(store, &fakeTemplateStore{}).Cancel(t.Context(), id)
 		if err != nil || n.Status != domain.StatusCancelled {
 			t.Errorf("got %s, %v; want cancelled, no error", n.Status, err)
 		}
@@ -406,7 +406,7 @@ func TestCancel(t *testing.T) {
 	for _, status := range []domain.Status{domain.StatusProcessing, domain.StatusSent, domain.StatusFailed} {
 		t.Run(string(status)+" is not cancellable", func(t *testing.T) {
 			store, id := saved(status)
-			_, err := NewNotifications(store).Cancel(t.Context(), id)
+			_, err := NewNotifications(store, &fakeTemplateStore{}).Cancel(t.Context(), id)
 			var nc *domain.NotCancellableError
 			if !errors.As(err, &nc) || nc.Status != status {
 				t.Errorf("err = %v, want NotCancellableError{%s}", err, status)
@@ -415,7 +415,7 @@ func TestCancel(t *testing.T) {
 	}
 
 	t.Run("unknown id", func(t *testing.T) {
-		_, err := NewNotifications(&fakeStore{}).Cancel(t.Context(), uuid.New())
+		_, err := NewNotifications(&fakeStore{}, &fakeTemplateStore{}).Cancel(t.Context(), uuid.New())
 		if !errors.Is(err, domain.ErrNotFound) {
 			t.Errorf("err = %v, want domain.ErrNotFound", err)
 		}
@@ -424,7 +424,7 @@ func TestCancel(t *testing.T) {
 	t.Run("pending again after a miss is retried", func(t *testing.T) {
 		store, id := saved(domain.StatusPending)
 		store.misses = 1
-		n, err := NewNotifications(store).Cancel(t.Context(), id)
+		n, err := NewNotifications(store, &fakeTemplateStore{}).Cancel(t.Context(), id)
 		if err != nil || n.Status != domain.StatusCancelled {
 			t.Errorf("got %s, %v; want cancelled on the second attempt", n.Status, err)
 		}
@@ -433,14 +433,14 @@ func TestCancel(t *testing.T) {
 	t.Run("gives up after a few attempts", func(t *testing.T) {
 		store, id := saved(domain.StatusPending)
 		store.misses = cancelAttempts
-		if _, err := NewNotifications(store).Cancel(t.Context(), id); err == nil {
+		if _, err := NewNotifications(store, &fakeTemplateStore{}).Cancel(t.Context(), id); err == nil {
 			t.Error("err = nil, want an error after every attempt missed")
 		}
 	})
 }
 
 func TestCancelBatch(t *testing.T) {
-	svc := NewNotifications(&fakeStore{})
+	svc := NewNotifications(&fakeStore{}, &fakeTemplateStore{})
 	batch, _, err := svc.CreateBatch(t.Context(), threeItems(), nil)
 	if err != nil {
 		t.Fatalf("CreateBatch: %v", err)
@@ -463,7 +463,7 @@ func TestCancelBatch(t *testing.T) {
 // Scheduled times are checked against the service's clock, for single and batch creates.
 func TestCreate_ChecksScheduleAgainstTheClock(t *testing.T) {
 	now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
-	svc := NewNotifications(&fakeStore{})
+	svc := NewNotifications(&fakeStore{}, &fakeTemplateStore{})
 	svc.now = func() time.Time { return now }
 
 	n := validNotification()

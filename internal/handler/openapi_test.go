@@ -46,7 +46,7 @@ func TestOpenAPI_DocumentsExactlyTheRoutes(t *testing.T) {
 	}
 
 	inRouter := map[string]bool{}
-	router := NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, &fakeNotificationService{}, prometheus.NewRegistry())
+	router := NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, &fakeNotificationService{}, nil, prometheus.NewRegistry())
 	walk := func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
 		inRouter[method+" "+route] = true
 		return nil
@@ -131,8 +131,36 @@ func TestOpenAPI_ResponsesMatchSpec(t *testing.T) {
 		{"batch cancel: invalid id", http.MethodPost, "/api/v1/batches/abc/cancel", "", &fakeNotificationService{}, nil},
 		{"health: ok", http.MethodGet, "/health", "", &fakeNotificationService{}, nil},
 	}
-
+	// Template endpoints, each with its own template service.
+	templateTests := []struct {
+		name, method, path, body string
+		tmpl                     *fakeTemplateService
+	}{
+		{"template create: created", http.MethodPost, "/api/v1/templates", `{"name":"welcome","body":"Hi {{name}}"}`,
+			&fakeTemplateService{}},
+		{"template create: invalid", http.MethodPost, "/api/v1/templates", `{"name":"x","body":"y"}`,
+			&fakeTemplateService{err: invalid}},
+		{"template create: name taken", http.MethodPost, "/api/v1/templates", `{"name":"x","body":"y"}`,
+			&fakeTemplateService{err: domain.ErrTemplateExists}},
+		{"template get: found", http.MethodGet, "/api/v1/templates/order_shipped", "", &fakeTemplateService{}},
+		{"template get: not found", http.MethodGet, "/api/v1/templates/missing", "", &fakeTemplateService{}},
+		{"template list", http.MethodGet, "/api/v1/templates", "", &fakeTemplateService{}},
+	}
+	type check struct {
+		name, method, path, body string
+		svc                      *fakeNotificationService
+		tmpl                     *fakeTemplateService
+		headers                  []string
+	}
+	var checks []check
 	for _, tt := range tests {
+		checks = append(checks, check{tt.name, tt.method, tt.path, tt.body, tt.svc, &fakeTemplateService{}, tt.headers})
+	}
+	for _, tt := range templateTests {
+		checks = append(checks, check{tt.name, tt.method, tt.path, tt.body, &fakeNotificationService{}, tt.tmpl, nil})
+	}
+
+	for _, tt := range checks {
 		t.Run(tt.name, func(t *testing.T) {
 			// The spec's server is http://localhost:8080, so requests use that host.
 			req := httptest.NewRequestWithContext(t.Context(), tt.method, "http://localhost:8080"+tt.path,
@@ -141,7 +169,7 @@ func TestOpenAPI_ResponsesMatchSpec(t *testing.T) {
 				req.Header.Set(tt.headers[i], tt.headers[i+1])
 			}
 			rec := httptest.NewRecorder()
-			NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, tt.svc, nil).ServeHTTP(rec, req)
+			NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, tt.svc, tt.tmpl, nil).ServeHTTP(rec, req)
 
 			route, params, err := specRouter.FindRoute(req)
 			if err != nil {

@@ -19,7 +19,7 @@ func listNotifications(t *testing.T, svc NotificationService, query string) *htt
 	t.Helper()
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/notifications"+query, nil)
 	rec := httptest.NewRecorder()
-	NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, svc, nil).ServeHTTP(rec, req)
+	NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, svc, nil, nil).ServeHTTP(rec, req)
 	return rec
 }
 

@@ -16,7 +16,9 @@ import (
 
 // NewRouter builds the HTTP router. With a registry, requests are measured and its metrics are
 // served at /metrics; tests that don't need metrics pass nil.
-func NewRouter(logger *slog.Logger, db Pinger, notifications NotificationService, reg *prometheus.Registry) http.Handler {
+func NewRouter(
+	logger *slog.Logger, db Pinger, notifications NotificationService, templates TemplateService, reg *prometheus.Registry,
+) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(CorrelationID)         // first, so every later log line has the ID
@@ -46,6 +48,9 @@ func NewRouter(logger *slog.Logger, db Pinger, notifications NotificationService
 		r.Post("/notifications/{id}/cancel", CancelNotification(notifications, logger))
 		r.Get("/batches/{id}", GetBatch(notifications, logger))
 		r.Post("/batches/{id}/cancel", CancelBatch(notifications, logger))
+		r.Get("/templates", ListTemplates(templates, logger))
+		r.Post("/templates", CreateTemplate(templates, logger))
+		r.Get("/templates/{name}", GetTemplate(templates, logger))
 	})
 
 	return r

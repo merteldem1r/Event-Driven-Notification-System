@@ -25,6 +25,8 @@ servers:
 tags:
   - name: notifications
     description: Create notifications and check their status
+  - name: templates
+    description: Message templates with placeholders
   - name: operations
     description: Endpoints for health checks and monitoring
 
@@ -530,6 +532,137 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /api/v1/templates:
+    get:
+      tags: [templates]
+      operationId: listTemplates
+      summary: List templates
+      description: Every template, ordered by name (at most 1,000).
+      parameters:
+        - $ref: "#/components/parameters/CorrelationID"
+      responses:
+        "200":
+          description: The templates.
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TemplateList"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    post:
+      tags: [templates]
+      operationId: createTemplate
+      summary: Create a template
+      description: |
+        A message body with `{{name}}` placeholders, used by creating a notification with
+        `template` and `variables` instead of `content`. Saved before the answer, so `201`.
+        Templates never change: a new wording is a new name, e.g. `order_shipped_v2`.
+        Placeholder names are letters, digits and `_`; spaces inside the braces are allowed.
+        Braces that aren't a placeholder are rejected.
+      parameters:
+        - $ref: "#/components/parameters/CorrelationID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTemplateRequest"
+      responses:
+        "201":
+          description: Created.
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationID"
+            Location:
+              description: URL of the new template.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Template"
+        "400":
+          description: The body is unreadable (`invalid_body`) or has invalid fields (`validation_failed`).
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: validation_failed
+                  message: the request has invalid fields
+                  details:
+                    - field: body
+                      message: "has a malformed placeholder; use {{name}} with letters, digits and '_'"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          description: A template with this name already exists (`template_exists`).
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: template_exists
+                  message: a template with this name already exists; templates never change, so use a new name
+        "413":
+          $ref: "#/components/responses/BodyTooLarge"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/templates/{name}:
+    get:
+      tags: [templates]
+      operationId: getTemplate
+      summary: Get a template
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+          example: order_shipped
+        - $ref: "#/components/parameters/CorrelationID"
+      responses:
+        "200":
+          description: The template and the variables it needs.
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Template"
+        "404":
+          description: No template has this name (`not_found`).
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: not_found
+                  message: the requested item was not found
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /health:
     get:
       tags: [operations]
@@ -738,7 +871,8 @@ components:
     CreateNotificationRequest:
       type: object
       additionalProperties: false
-      required: [channel, recipient, content]
+      required: [channel, recipient]
+      description: Give either `content`, or `template` with `variables`.
       properties:
         channel:
           $ref: "#/components/schemas/Channel"
@@ -753,8 +887,27 @@ components:
           type: string
           minLength: 1
           maxLength: 100000
-          description: Message text, not blank. At most 1,600 characters for SMS, 500 for push, 100,000 for email.
+          description: |
+            Message text, not blank. At most 1,600 characters for SMS, 500 for push, 100,000 for email.
+            Required unless `template` is given; must be left out when it is.
           example: Flash sale starts now!
+        template:
+          type: string
+          description: |
+            Name of a template (see `/api/v1/templates`) to make the content from. Its placeholders are
+            filled in from `variables` when the notification is created; the length limits apply to
+            the result. An unknown name is a `400`.
+          example: order_shipped
+        variables:
+          type: object
+          additionalProperties:
+            type: string
+          description: |
+            Values for the template's placeholders, as strings. Every placeholder needs one (a
+            missing one is a `400` naming `variables.<name>`); extra ones are ignored. Only with `template`.
+          example:
+            first_name: Ayse
+            order_id: "1042"
         priority:
           allOf:
             - $ref: "#/components/schemas/Priority"
@@ -898,6 +1051,9 @@ components:
           type: string
           format: date-time
           description: When the client asked for it to be sent, in UTC. Present only for scheduled notifications.
+        template:
+          type: string
+          description: The template the content was made from. Present only for notifications created from one.
         last_error:
           type: string
           description: Why the last attempt failed. Present only after a failure.
@@ -933,6 +1089,54 @@ components:
         created_at: "2026-11-20T10:00:00Z"
         updated_at: "2026-11-20T10:00:00Z"
 
+    CreateTemplateRequest:
+      type: object
+      additionalProperties: false
+      required: [name, body]
+      properties:
+        name:
+          type: string
+          pattern: "^[a-z0-9][a-z0-9_.-]{0,63}$"
+          description: Lowercase letters, digits, `_`, `-` and `.`, 1 to 64 characters, starting with a letter or digit.
+          example: order_shipped
+        body:
+          type: string
+          minLength: 1
+          maxLength: 100000
+          example: "Hi {{first_name}}, your order {{order_id}} has shipped."
+
+    Template:
+      type: object
+      required: [name, body, variables, created_at]
+      properties:
+        name:
+          type: string
+        body:
+          type: string
+        variables:
+          type: array
+          description: The placeholder names in the body, each once, in order of first use. A notification must give a value for each.
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+          description: In UTC.
+      example:
+        name: order_shipped
+        body: "Hi {{first_name}}, your order {{order_id}} has shipped."
+        variables: [first_name, order_id]
+        created_at: "2026-11-20T10:00:00Z"
+
+    TemplateList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Template"
+
     ErrorResponse:
       type: object
       required: [error]
@@ -951,6 +1155,7 @@ components:
                 - not_found
                 - idempotency_key_reused
                 - not_cancellable
+                - template_exists
                 - route_not_found
                 - method_not_allowed
                 - internal_error

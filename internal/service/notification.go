@@ -25,15 +25,21 @@ type NotificationStore interface {
 	CancelPendingInBatch(ctx context.Context, batchID uuid.UUID) (int, error)
 }
 
-// Notifications implements the notification use cases.
-type Notifications struct {
-	store NotificationStore
-	now   func() time.Time // the clock for validating scheduled times; replaced in tests
+// TemplateFinder loads templates by name.
+type TemplateFinder interface {
+	Get(ctx context.Context, name string) (domain.Template, error)
 }
 
-// NewNotifications returns the notification use cases backed by store.
-func NewNotifications(store NotificationStore) *Notifications {
-	return &Notifications{store: store, now: time.Now}
+// Notifications implements the notification use cases.
+type Notifications struct {
+	store     NotificationStore
+	templates TemplateFinder
+	now       func() time.Time // the clock for validating scheduled times; replaced in tests
+}
+
+// NewNotifications returns the notification use cases backed by store, with templates from templates.
+func NewNotifications(store NotificationStore, templates TemplateFinder) *Notifications {
+	return &Notifications{store: store, templates: templates, now: time.Now}
 }
 
 // Create validates n and saves it. Saving also queues it for sending.
@@ -42,6 +48,13 @@ func NewNotifications(store NotificationStore) *Notifications {
 // Invalid input returns a *domain.ValidationError; a key reused for a different request
 // returns domain.ErrIdempotencyKeyReused.
 func (s *Notifications) Create(ctx context.Context, n domain.Notification) (_ domain.Notification, replayed bool, _ error) {
+	fields, err := s.render(ctx, &n, map[string]*domain.Template{})
+	if err != nil {
+		return domain.Notification{}, false, err
+	}
+	if len(fields) > 0 {
+		return domain.Notification{}, false, &domain.ValidationError{Fields: fields}
+	}
 	if err := n.Validate(s.now()); err != nil {
 		return domain.Notification{}, false, err
 	}
@@ -63,13 +76,30 @@ func (s *Notifications) Create(ctx context.Context, n domain.Notification) (_ do
 func (s *Notifications) CreateBatch(
 	ctx context.Context, ns []domain.Notification, idempotencyKey *string,
 ) (_ domain.Batch, replayed bool, _ error) {
-	if err := domain.ValidateBatch(ns, idempotencyKey, s.now()); err != nil {
+	items := make([]domain.Notification, len(ns)) // a copy, so the caller's slice isn't changed
+	copy(items, ns)
+	if len(items) <= domain.MaxBatchSize { // an oversized batch is rejected by ValidateBatch without lookups
+		var fields []domain.FieldError
+		cache := map[string]*domain.Template{} // each template is loaded once per batch
+		for i := range items {
+			fs, err := s.render(ctx, &items[i], cache)
+			if err != nil {
+				return domain.Batch{}, false, err
+			}
+			for _, f := range fs {
+				fields = append(fields, domain.FieldError{Field: fmt.Sprintf("notifications[%d].%s", i, f.Field), Message: f.Message})
+			}
+		}
+		if len(fields) > 0 {
+			return domain.Batch{}, false, &domain.ValidationError{Fields: fields}
+		}
+	}
+	if err := domain.ValidateBatch(items, idempotencyKey, s.now()); err != nil {
 		return domain.Batch{}, false, err
 	}
 
 	batchID := uuid.New()
-	items := make([]domain.Notification, len(ns)) // a copy, so the caller's slice isn't changed
-	for i, n := range ns {
+	for i, n := range items {
 		n.BatchID = &batchID
 		if idempotencyKey != nil {
 			n.IdempotencyKey = ptr(itemKey(*idempotencyKey, i))
@@ -85,6 +115,47 @@ func (s *Notifications) CreateBatch(
 		return domain.Batch{}, false, fmt.Errorf("create batch: %w", err)
 	}
 	return domain.Batch{ID: batchID, Notifications: created}, false, nil
+}
+
+// render fills n.Content from n's template and variables (D22). Problems with the request are
+// returned as field errors; only a failed lookup is an error. cache holds templates already
+// loaded, nil for names that don't exist.
+func (s *Notifications) render(ctx context.Context, n *domain.Notification, cache map[string]*domain.Template) ([]domain.FieldError, error) {
+	if n.Template == nil {
+		if len(n.Variables) > 0 {
+			return []domain.FieldError{{Field: "variables", Message: "are only allowed together with template"}}, nil
+		}
+		return nil, nil
+	}
+	if n.Content != "" {
+		return []domain.FieldError{{Field: "content", Message: "must be left out when template is set"}}, nil
+	}
+
+	name := *n.Template
+	t, loaded := cache[name]
+	if !loaded {
+		found, err := s.templates.Get(ctx, name)
+		switch {
+		case errors.Is(err, domain.ErrNotFound):
+			t = nil
+		case err != nil:
+			return nil, fmt.Errorf("load template %q: %w", name, err)
+		default:
+			t = &found
+		}
+		cache[name] = t
+	}
+	if t == nil {
+		return []domain.FieldError{{Field: "template", Message: fmt.Sprintf("no template is named %q", name)}}, nil
+	}
+
+	content, err := t.Render(n.Variables)
+	var ve *domain.ValidationError
+	if errors.As(err, &ve) {
+		return ve.Fields, nil
+	}
+	n.Content = content // checked by Validate like any content, e.g. the SMS length limit
+	return nil, nil
 }
 
 // itemKey derives one item's key from the batch key, reusing the unique index on single keys.
