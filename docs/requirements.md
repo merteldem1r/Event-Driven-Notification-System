@@ -40,7 +40,7 @@ Status values: **Done**, **Partial**, **Todo**.
 | RET-2 | Exponential backoff with jitter between attempts | Done | 8 | `internal/retry` (D8): 10 s doubling to 10 min, equal jitter |
 | RET-3 | Max attempts, then mark `failed` and keep the last error | Done | 8 | `RETRY_MAX_ATTEMPTS` (5, D8); `last_error` keeps the last failure |
 | RET-4 | Respect `Retry-After` from the provider | Done | 8 | Seconds or HTTP date; used when longer than our wait, capped at `RETRY_MAX_DELAY` (D8) |
-| RET-5 | Recover jobs held by crashed workers (lease expiry) | Todo | 8 | |
+| RET-5 | Recover jobs held by crashed workers (lease expiry) | Done | 8 | Sweep every 10 s in each worker puts expired leases (60 s) back in the queue (D19); a slow worker's late result is refused by the attempt check |
 | RET-6 | Store the provider's `messageId` on success | Done | 6 | `provider_message_id`, set with status `sent` |
 
 ## 4. Observability
@@ -64,7 +64,7 @@ Status values: **Done**, **Partial**, **Todo**.
 
 | ID | Feature | Status | Phase | Notes |
 |---|---|---|---|---|
-| OPT-1 | Failure handling | Partial | 6, 8 | Graceful worker shutdown done (finish in-flight work within a timeout); retries with backoff and a maximum, then `failed` with the last error (8.2, 8.3); crashed workers' notifications recovered by lease expiry (8.4); re-queue endpoint optional (8.5); no circuit breaker (not needed with retries) |
+| OPT-1 | Failure handling | Partial | 6, 8 | Graceful worker shutdown done (finish in-flight work within a timeout); retries with backoff and a maximum, then `failed` with the last error (8.2, 8.3); crashed workers' notifications recovered by lease expiry (8.4, done); re-queue endpoint optional (8.5); no circuit breaker (not needed with retries) |
 | OPT-2 | Scheduled notifications (future delivery) | Todo | 10 | |
 | OPT-3 | Template system with variable substitution | Todo | 11 | |
 | OPT-4 | WebSocket real-time status updates | Todo | 12 | Redis pub/sub between worker and API |

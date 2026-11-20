@@ -17,7 +17,7 @@
 | D5 | Batch validation: all-or-nothing vs partial | Phase 5 (batch API) | Decided: all-or-nothing |
 | D6 | Pagination: offset vs cursor | Phase 5 (list API) | Decided: cursor |
 | D7 | Priority strategy: strict vs weighted | Phase 6 (worker) | Decided: weighted 6:3:1 |
-| D8 | Retry numbers: attempts, delays, lease time | Phase 8 (retries) | Decided: 5 attempts; 10 s doubling to 10 min, equal jitter; longer `Retry-After` wins, same cap; lease in 8.4 |
+| D8 | Retry numbers: attempts, delays, lease time | Phase 8 (retries) | Decided: 5 attempts; 10 s doubling to 10 min, equal jitter; longer `Retry-After` wins, same cap; lease 60 s |
 | D9 | Default provider in docker-compose: mock vs webhook.site | Phase 6 (provider), revised in Phase 7 | Decided: own fake provider by default, webhook.site via `PROVIDER_URL` |
 | D10 | Loading a local `.env.local` for development | Phase 2 | Decided: godotenv |
 | D11 | API error format, create response, unknown JSON fields | Phase 4 (create API) | Decided: own envelope, full notification, reject |
@@ -28,6 +28,7 @@
 | D16 | When a worker asks the limiter: after or before claiming | Phase 7 (rate limiting) | Decided: loops per channel; claim, then slot, then send (revised in 7.4) |
 | D17 | What "max 100 per second" means, and the headroom | Phase 7 (load test) | Decided: at most 100 at the provider in any one second; send at 85/s, burst 5 |
 | D18 | Which provider errors are worth retrying | Phase 8 (retries) | Decided: no response, 408, 429, 5xx, and 2xx without a receipt; not 3xx or other 4xx |
+| D19 | How notifications of a crashed worker are taken back | Phase 8 (retries) | Decided: a sweep every 10 s puts expired leases back in the queue |
 
 **Why only D1–D3 now?** They decide *what the database schema looks like, how workers are
 written, and what runs in docker-compose*. Changing them later means rewriting a lot.
@@ -446,7 +447,11 @@ endpoint (8.5), not for ever longer waits. A wait asked for by `Retry-After` sti
 attempt, so a provider that always answers `429` can't keep a notification forever. After the
 5th failed attempt the notification is `failed` with its last error. Settings:
 `RETRY_MAX_ATTEMPTS` (5), `RETRY_BASE_DELAY` (10s), `RETRY_MAX_DELAY` (10m). The delay is added
-to the database's clock, like the lease. The lease (60 s) is confirmed in 8.4.
+to the database's clock, like the lease.
+
+The lease stays **60 s** (confirmed in 8.4, D19): twelve times the provider timeout, so a slow
+but working worker is never mistaken for a crashed one. 30 s would recover a crash faster but
+could take over from a worker that is only stalled, e.g. during a long database pause.
 
 ---
 
@@ -469,6 +474,33 @@ RET-1 asks to retry temporary failures (timeout, network, 5xx, 429) and not perm
 The provider client decides it (`provider.IsTemporary`), since only it knows HTTP. A cut-off by
 shutdown is handled before this: it isn't a failure, and the notification goes back to the
 queue (Phase 6).
+
+---
+
+## D19 — Taking back the notifications of a crashed worker
+
+A claim sets a lease (`locked_until`). If the worker crashes or is killed before it records a
+result, the notification stays `processing` and would never be sent. Two ways to take it back
+once the lease has expired:
+
+- **Inside the claim:** the claim also takes `processing` rows with an expired lease. No extra
+  loop, but the hottest query in the system gets an `OR` over two kinds of rows and needs two
+  partial indexes to stay fast.
+- **A periodic sweep:** every worker runs one small `UPDATE` every few seconds that puts expired
+  rows back to `pending`; the normal claim then picks them up.
+
+Chosen: **the sweep, every 10 s** (`WORKER_RECOVER_INTERVAL`), with the 60 s lease (D8). The
+claim stays as it was. The recovered row keeps its attempt count (the provider may have received
+the message) and gets `last_error` "lease expired: the worker stopped before recording a
+result". Every worker process sweeps; that is harmless, since a row is taken back only once.
+A small partial index on `locked_until` for `processing` rows keeps the sweep cheap (migration
+000005). A crashed send is tried again within about 70 s.
+
+Safety if the worker was only slow, not dead: its late result is refused, because results are
+saved only while the row is still `processing` with the same attempt number. The cost is the
+usual one of at-least-once delivery: if the crashed worker's request had reached the provider,
+the message is sent a second time, with the same `Idempotency-Key` so a provider that honours
+it can drop the repeat.
 
 ---
 
@@ -514,6 +546,7 @@ queue (Phase 6).
 | D16 | Worker and rate limit | **Loops per channel; claim that channel, then wait for a slot, then send** (first slot-before-claim, revised after the load test); `WORKER_CONCURRENCY` = loops per channel (default 10); claim filtered by channel on index `(channel, priority, next_attempt_at)`; no slot or shutdown during the wait → `Unclaim` (back to `pending`, attempt not counted); Redis health on the worker (Phase 9), not the API | A backlog on one channel never holds up the others; nothing slow (database pauses) between permission and request, so arrivals stay even; a Redis outage uses no attempts; idle loops take no slots | Priority across channels (D7 works within a channel); a claimed notification holds its lease while waiting for its slot (a fraction of a second); a new index | 2026-11-20 |
 | D17 | Meaning of "max 100/s" | **At most 100 per channel at the provider in any one-second window**; workers send at **85/s with burst 5** (at most 90 allowed); provider client keeps up to 1,000 idle connections; the fake provider measures the busiest window at arrival (`GET /_stats`) and `make loadtest` fails above 100 | The strict reading, judged where it matters; measured 90 to 93 with 3 and 5 workers | About 15% of the top speed (85 instead of 100 per second per channel) | 2026-11-20 |
 | D18 | Provider errors worth retrying | **Temporary: no response, `408`, `429`, `5xx`, `2xx` without a `messageId`; permanent: `3xx`, other `4xx`, errors before sending**; decided by `provider.IsTemporary` | Retries only where they can help; a garbled receipt is retried with the same `Idempotency-Key` | A possible duplicate from a provider that ignores `Idempotency-Key` and sends a broken receipt | 2026-11-20 |
+| D19 | Crashed worker recovery | **A sweep in every worker, every 10 s, puts `processing` rows with an expired lease back to `pending`** (attempt kept, `last_error` says why); lease 60 s; partial index on `locked_until` | The claim query stays simple; a stopped worker's notification is sent again within ~70 s; a late result from a slow worker is refused by the attempt check | Up to ~70 s delay after a crash; a possible duplicate if the crashed request had reached the provider | 2026-11-20 |
 | D9 | Provider | **webhook.site only, for now**: the worker sends to `PROVIDER_URL` (your own webhook.site URL, set to answer `202 {messageId, status, timestamp}`); an own local fake provider is noted in the plan as an optional later step | Exactly the integration the requirements ask for; less code now; every send is visible in the browser | Offline runs; load tests beyond webhook.site's free request limit; a provider that fails or slows down on purpose for retry tests (until the fake is added) | 2026-11-20 |
 | D8 | Retry numbers | **5 attempts; waits start at 10 s and double, capped at 10 min; equal jitter (half to all of the wait); `Retry-After` used when longer, same cap**; then `failed` with the last error; `RETRY_MAX_ATTEMPTS`, `RETRY_BASE_DELAY`, `RETRY_MAX_DELAY` | Covers blips and short outages (~2.5 min in total) while messages are still useful; retries that failed together are spread out; never earlier than the provider asked, never parked for days | Survival of long outages by waiting alone (8.5 handles those) | 2026-11-20 |
 \1 **Own fake provider by default** (`cmd/fakeprovider`, `internal/fakeprovider`): answers `POST` on any path like webhook.site with `202 {messageId, status, timestamp}`; `FAKE_PROVIDER_LATENCY` (default 50ms) and `FAKE_PROVIDER_FAILURE_RATE` (share answered `503`); logs the messages received per channel each second; a Compose service the worker uses unless `PROVIDER_URL` is set (e.g. to webhook.site in `.env`) | Load tests at 100/s per channel without webhook.site's free request limit; provider failures on demand for Phase 8; works offline; the per-second report measures the rate limit | A second, simpler provider than the real one (no `429`, no `Retry-After` yet; added when Phase 8 needs them) | 2026-11-20 |
