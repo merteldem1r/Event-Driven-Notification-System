@@ -66,7 +66,7 @@ Status values: **Done**, **Partial**, **Todo**.
 |---|---|---|---|---|
 | OPT-1 | Failure handling | Done | 6, 8 | Graceful worker shutdown (finish in-flight work within a timeout); retries with backoff and a maximum, then `failed` with the last error (8.2, 8.3); crashed workers' notifications recovered by lease expiry (8.4); no re-queue endpoint or circuit breaker (not needed with retries) |
 | OPT-2 | Scheduled notifications (future delivery) | Done | 10 | `scheduled_at` on single and batch creates, future and at most 30 days ahead (D21); the queue holds the row until then; cancellable while waiting |
-| OPT-3 | Template system with variable substitution | Todo | 11 | |
+| OPT-3 | Template system with variable substitution | Done | 11 | Immutable templates with `{{name}}` placeholders (create, get, list); notifications use `template` + `variables` instead of `content`, rendered at creation (D22) |
 | OPT-4 | WebSocket real-time status updates | Todo | 12 | Redis pub/sub between worker and API |
 | OPT-5 | Distributed tracing | Todo | 13 | OpenTelemetry + Jaeger |
 | OPT-6 | GitHub Actions CI/CD: automated testing and linting | Partial | 2, 14 | Commit-message check, lint, vet, tests with race detector (done); image build and more checks in Phase 14 |

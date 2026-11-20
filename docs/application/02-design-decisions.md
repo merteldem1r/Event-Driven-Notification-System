@@ -31,6 +31,7 @@
 | D19 | How notifications of a crashed worker are taken back | Phase 8 (retries) | Decided: a sweep every 10 s puts expired leases back in the queue |
 | D20 | Metrics: queue depth, send results, latency, HTTP | Phase 9 (observability) | Decided: queue counted on each scrape; one send counter with `result`; two latency histograms; HTTP request metrics |
 | D21 | Scheduled notifications: storage and rules | Phase 10 (scheduling) | Decided: `scheduled_at` column; future only, at most 30 days; per batch item |
+| D22 | Templates: syntax, reference, lifecycle, variables | Phase 11 (templates) | Decided: `{{name}}` placeholders; by unique name; create, get, list only; missing variable 400, extras ignored |
 
 **Why only D1–D3 now?** They decide *what the database schema looks like, how workers are
 written, and what runs in docker-compose*. Changing them later means rewriting a lot.
@@ -568,6 +569,36 @@ two doesn't matter at these scales. An idempotent replay must repeat the same ti
 
 ---
 
+## D22 — Templates
+
+A template is a stored body such as `Hi {{first_name}}, order {{order_id}} has shipped.`; a
+notification names it and gives the values instead of `content`. Four choices:
+
+- **Syntax.** Plain `{{name}}` placeholders (our own ~30 lines), or Go's `text/template` with
+  conditions and loops. With `text/template` a template becomes a small program: harder error
+  messages, and logic we would have to reason about.
+- **Reference.** By a unique name (`order_shipped`), or by a generated UUID. A name reads well in
+  client code and is the same in every environment.
+- **Lifecycle.** Create, get and list only, or also update and delete. Immutable templates can't
+  break a client that relies on a name; a new wording is a new name (`order_shipped_v2`).
+- **Variables that don't match.** A missing one is a `400`; extra ones are ignored, or also a
+  `400`. Ignoring extras lets a client send one standard set to many templates; a misspelled
+  name still shows, as the correct one missing.
+
+Chosen: **`{{name}}` placeholders (letters, digits, `_`; spaces inside the braces allowed),
+referenced by a unique name, create, get and list only, a missing variable is a `400` naming
+`variables.<name>`, extra ones are ignored.**
+
+Two rules without a real alternative: the content is **rendered when the notification is
+created**, so the stored content is the final text, the per-channel length limit applies to it,
+and workers don't change; and a template **isn't tied to a channel**. Values are inserted as they
+are, never read as placeholders again. Braces in a body that aren't a placeholder are rejected
+when the template is created, so a typo like `{{first name}}` is caught then, not at sending.
+The notification keeps the template's name (a column with a foreign key; templates are never
+deleted). A template is saved before the answer, so creating one returns `201`, not `202`.
+
+---
+
 ## Resulting architecture
 
 ```
@@ -613,6 +644,7 @@ two doesn't matter at these scales. An idempotent replay must repeat the same ti
 | D19 | Crashed worker recovery | **A sweep in every worker, every 10 s, puts `processing` rows with an expired lease back to `pending`** (attempt kept, `last_error` says why); lease 60 s; partial index on `locked_until` | The claim query stays simple; a stopped worker's notification is sent again within ~70 s; a late result from a slow worker is refused by the attempt check | Up to ~70 s delay after a crash; a possible duplicate if the crashed request had reached the provider | 2026-11-20 |
 | D20 | Metrics | **API:** `notifications_queue_depth{channel,status}` and `notifications_queue_oldest_due_seconds{channel}` counted in the database on each scrape; `http_requests_total{method,route,status}`, `http_request_duration_seconds{method,route}`. **Worker (9.2):** `notifications_send_total{channel,result}`, provider-call and end-to-end latency histograms, recovered leases. Own registry per program | Exact queue numbers without coordination between processes; success rate from one counter; latency seen both at the provider and by the customer; bounded series (route patterns, not URLs) | One small query per scrape; the same queue numbers from every API instance | 2026-11-20 |
 | D21 | Scheduled notifications | **Optional `scheduled_at` (RFC 3339 with a time zone), stored in a new column; `next_attempt_at` starts there; must be in the future and at most 30 days ahead, otherwise `400`; per batch item** | A past time is usually a time zone mistake; the column keeps the requested time through retries and lets the delivery metric count from it | Clients wanting "now" leave the field out; no scheduling beyond 30 days | 2026-11-20 |
+| D22 | Templates | **`{{name}}` placeholders, by unique name; `POST`, `GET /api/v1/templates` and `GET /api/v1/templates/{name}` only (immutable); `template` + `variables` instead of `content`; rendered at creation; a missing variable is a `400`, extras are ignored; not tied to a channel** | Simple to explain and safe (no logic in templates); immutable templates can't break clients; the stored content is the final text | No conditions or loops; a new wording needs a new name | 2026-11-20 |
 | D9 | Provider | **webhook.site only, for now**: the worker sends to `PROVIDER_URL` (your own webhook.site URL, set to answer `202 {messageId, status, timestamp}`); an own local fake provider is noted in the plan as an optional later step | Exactly the integration the requirements ask for; less code now; every send is visible in the browser | Offline runs; load tests beyond webhook.site's free request limit; a provider that fails or slows down on purpose for retry tests (until the fake is added) | 2026-11-20 |
 | D8 | Retry numbers | **5 attempts; waits start at 10 s and double, capped at 10 min; equal jitter (half to all of the wait); `Retry-After` used when longer, same cap**; then `failed` with the last error; `RETRY_MAX_ATTEMPTS`, `RETRY_BASE_DELAY`, `RETRY_MAX_DELAY` | Covers blips and short outages (~2.5 min in total) while messages are still useful; retries that failed together are spread out; never earlier than the provider asked, never parked for days | Long outages end in `failed` rather than waiting longer | 2026-11-20 |
 | D9 (revised) | Provider | **Own fake provider by default** (`cmd/fakeprovider`, `internal/fakeprovider`): answers `POST` on any path like webhook.site with `202 {messageId, status, timestamp}`; `FAKE_PROVIDER_LATENCY` (default 50ms) and `FAKE_PROVIDER_FAILURE_RATE` (share answered `503`); logs the messages received per channel each second; a Compose service the worker uses unless `PROVIDER_URL` is set (e.g. to webhook.site in `.env`) | Load tests at 100/s per channel without webhook.site's free request limit; provider failures on demand for Phase 8; works offline; the per-second report measures the rate limit | A second, simpler provider than the real one (no `429`, no `Retry-After` yet; added when Phase 8 needs them) | 2026-11-20 |

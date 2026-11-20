@@ -169,6 +169,11 @@ waits for the actual delivery; it can check the status any time, or send a whole
 A notification can also be **scheduled** for later, up to 30 days ahead, with `scheduled_at`.
 It waits in the queue until that time and can be cancelled until then.
 
+Messages that repeat can come from a **template** instead of being written out each time:
+the client stores `Hi {{first_name}}, your order {{order_id}} has shipped.` once, then sends
+only the template's name and the values. The API fills them in before storing the
+notification, so the worker sends finished text.
+
 ### Step 2. Most important first, but nobody waits forever
 
 Each notification has a priority: `high`, `normal` or `low`. When all three kinds are waiting,
@@ -312,13 +317,29 @@ All endpoints are under `/api/v1` and use JSON. Try them at
 | `POST /notifications/{id}/cancel` | Cancel a notification that hasn't been sent yet |
 | `GET /batches/{id}` | Progress of a batch: how many are pending, sent, failed |
 | `POST /batches/{id}/cancel` | Cancel what hasn't been sent yet in a batch |
+| `POST /templates` | Create a template with `{{name}}` placeholders; templates never change once created |
+| `GET /templates/{name}`, `GET /templates` | One template, with the variables it needs, or all of them |
 
 Channels: `sms`, `email`, `push`. Priorities: `high`, `normal` (default), `low`.
 
 <details>
-<summary>Examples: scheduled, batch, list, errors</summary>
+<summary>Examples: template, scheduled, batch, list, errors</summary>
 
 ```bash
+# Create a template once
+curl -X POST localhost:8080/api/v1/templates \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"order_shipped","body":"Hi {{first_name}}, your order {{order_id}} has shipped."}'
+# 201 {"name":"order_shipped",...,"variables":["first_name","order_id"],...}
+
+# Then send with the template's name and the values instead of content
+curl -X POST localhost:8080/api/v1/notifications \
+  -H 'Content-Type: application/json' \
+  -d '{"recipient":"+905551234567","channel":"sms","template":"order_shipped",
+       "variables":{"first_name":"Ayse","order_id":"1042"}}'
+# 202 {"content":"Hi Ayse, your order 1042 has shipped.","template":"order_shipped",...}
+# A missing variable is a 400 naming it: "variables.order_id": "is required by template order_shipped"
+
 # Schedule a notification (RFC 3339 with a time zone; future, at most 30 days ahead)
 curl -X POST localhost:8080/api/v1/notifications \
   -H 'Content-Type: application/json' \

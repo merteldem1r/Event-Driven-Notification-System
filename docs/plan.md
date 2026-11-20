@@ -9,7 +9,7 @@ is tested. Then we stop, explain it, and the user commits it.
 
 Status: `[x]` done, `[ ]` not done. The next step is marked **(next)**.
 
-> **Current position:** optional features, in this order: 10 scheduled notifications (done), 11 templates **(next)**, 14 full CI/CD; then decide on more (WebSocket, 12).
+> **Current position:** optional features, in this order: 10 scheduled notifications (done), 11 templates (done), 14 full CI/CD **(next)**; then decide on more (WebSocket, 12).
 
 ---
 
@@ -117,7 +117,16 @@ Chosen: 10, 11 and 14, in that order (cheapest first, CI/CD last so it covers th
   starting there, so the queue holds it until then; future only, at most 30 days ahead, else
   `400`; shown in responses; delivery-time metric counts from it. Measured: scheduled 15 s
   ahead, sent 0.44 s after its time (OPT-2). Summary: `docs/application/12-scheduled-notifications.md`
-- [ ] 11 Templates with variable substitution (OPT-3)
+- [x] 11 Templates with variable substitution (D22, OPT-3)
+  - [x] 11.1 Template resource: `templates` table (migration 000007), `POST /api/v1/templates` (`201`,
+    `409 template_exists` for a taken name), `GET /api/v1/templates/{name}`, `GET /api/v1/templates`;
+    `{{name}}` placeholders, malformed braces rejected at creation; responses list the variables
+  - [x] 11.2 Notifications from a template: `template` + `variables` instead of `content` on single and
+    batch creates; rendered at creation, then validated like any content; missing variable `400`
+    `variables.<name>`, extras ignored, unknown template `400`; each template loaded once per batch;
+    the notification keeps the template name (migration 000008, foreign key)
+
+  Summary: `docs/application/13-templates.md`
 - [ ] 12 WebSocket status updates (OPT-4)
 - [ ] 13 Distributed tracing with OpenTelemetry + Jaeger (OPT-5)
 - [ ] 14 Full CI/CD: race detector, vulnerability check, image build (OPT-6)
