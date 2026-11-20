@@ -64,11 +64,11 @@ func (f *fakeProcessor) snapshot() (calls, processed int, cancelled bool) {
 	return f.calls, f.processed, f.cancelled
 }
 
-// start runs a worker in the background; the channel receives Run's result.
+// start runs a worker with one processor in the background; the channel receives Run's result.
 func start(proc Processor, cfg Config) (context.CancelFunc, <-chan error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- New(proc, cfg, slog.New(slog.DiscardHandler)).Run(ctx) }()
+	go func() { done <- New([]Processor{proc}, cfg, slog.New(slog.DiscardHandler)).Run(ctx) }()
 	return cancel, done
 }
 
@@ -104,6 +104,34 @@ func TestRun_ProcessesQueueThenPolls(t *testing.T) {
 		synctest.Wait()
 		if ok, err := returned(done); !ok || err != nil {
 			t.Errorf("Run returned %v, %v; want it stopped without error", ok, err)
+		}
+	})
+}
+
+// Each processor has its own loops, so one that is stuck can't hold up another (D16):
+// a backlog on one channel never stops the other channels.
+func TestRun_EachProcessorHasItsOwnLoops(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		stuck := &fakeProcessor{queue: 100, block: make(chan struct{})} // every call hangs
+		free := &fakeProcessor{queue: 50}
+		cfg := testConfig
+		cfg.Concurrency = 2
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- New([]Processor{stuck, free}, cfg, slog.New(slog.DiscardHandler)).Run(ctx) }()
+
+		synctest.Wait()
+		if calls, _, _ := stuck.snapshot(); calls != 2 {
+			t.Errorf("stuck processor: %d calls, want 2: its own 2 loops, both hanging", calls)
+		}
+		if _, processed, _ := free.snapshot(); processed != 50 {
+			t.Errorf("other processor processed %d, want all 50 while the first is stuck", processed)
+		}
+
+		cancel()
+		close(stuck.block) // let the hanging calls finish so Run can return
+		if err := <-done; err != nil {
+			t.Errorf("Run = %v, want nil", err)
 		}
 	})
 }

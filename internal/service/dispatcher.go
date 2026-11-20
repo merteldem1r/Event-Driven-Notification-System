@@ -14,10 +14,10 @@ import (
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/provider"
 )
 
-// Queue hands out due notifications, one priority at a time, and records what happened to them.
-// The record methods take the claim's attempt number and report ok=false if it was claimed again since.
+// Queue hands out due notifications, one channel and priority at a time, and records what happened
+// to them. The record methods take the claim's attempt number and report ok=false if it was claimed again since.
 type Queue interface {
-	ClaimNext(ctx context.Context, p domain.Priority, lease time.Duration) (_ domain.Notification, ok bool, _ error)
+	ClaimNext(ctx context.Context, ch domain.Channel, p domain.Priority, lease time.Duration) (_ domain.Notification, ok bool, _ error)
 	MarkSent(ctx context.Context, id uuid.UUID, attempt int, providerMessageID string) (ok bool, _ error)
 	MarkFailed(ctx context.Context, id uuid.UUID, attempt int, lastError string) (ok bool, _ error)
 	Release(ctx context.Context, id uuid.UUID, attempt int) (ok bool, _ error)
@@ -31,32 +31,36 @@ type Sender interface {
 // recordTimeout bounds saving a send's result, which must happen even during shutdown.
 const recordTimeout = 5 * time.Second
 
-// claimPattern is D7, weighted priority: of every 10 claims, 6 prefer high, 3 normal and
-// 1 low. Interleaved, so no priority waits through a long run of the others.
+// claimPattern is D7, weighted priority: of every 10 claims of a channel, 6 prefer high, 3 normal
+// and 1 low. Interleaved, so no priority waits through a long run of the others.
 var claimPattern = [10]domain.Priority{
 	domain.PriorityHigh, domain.PriorityNormal, domain.PriorityHigh, domain.PriorityHigh, domain.PriorityLow,
 	domain.PriorityHigh, domain.PriorityNormal, domain.PriorityHigh, domain.PriorityNormal, domain.PriorityHigh,
 }
 
-// Dispatcher delivers queued notifications, one per ProcessNext call; the worker calls it.
+// Dispatcher delivers the queued notifications of one channel, one per ProcessNext call; the
+// worker calls it. Each channel has its own Dispatcher, so a backlog on one channel never
+// holds up the others (D16).
 type Dispatcher struct {
-	queue  Queue
-	sender Sender
-	lease  time.Duration
-	logger *slog.Logger
-	turn   atomic.Uint64 // position in claimPattern, shared by all worker loops
+	channel domain.Channel
+	queue   Queue
+	sender  Sender
+	lease   time.Duration
+	logger  *slog.Logger
+	turn    atomic.Uint64 // position in claimPattern, shared by this channel's worker loops
 }
 
-// NewDispatcher returns a Dispatcher that leases each claimed notification for lease
-// and sends it through sender.
-func NewDispatcher(queue Queue, sender Sender, lease time.Duration, logger *slog.Logger) *Dispatcher {
-	return &Dispatcher{queue: queue, sender: sender, lease: lease, logger: logger}
+// NewDispatcher returns a Dispatcher for channel ch that leases each claimed notification for
+// lease and sends it through sender.
+func NewDispatcher(ch domain.Channel, queue Queue, sender Sender, lease time.Duration, logger *slog.Logger) *Dispatcher {
+	return &Dispatcher{channel: ch, queue: queue, sender: sender, lease: lease, logger: logger}
 }
 
-// ProcessNext takes the next notification and delivers it; found is false if nothing is due.
+// ProcessNext takes the next notification of the channel and delivers it; found is false if
+// nothing is due.
 func (d *Dispatcher) ProcessNext(ctx context.Context) (found bool, err error) {
 	for _, p := range d.claimOrder() {
-		n, ok, err := d.queue.ClaimNext(ctx, p, d.lease)
+		n, ok, err := d.queue.ClaimNext(ctx, d.channel, p, d.lease)
 		if err != nil {
 			return false, fmt.Errorf("claim: %w", err)
 		}

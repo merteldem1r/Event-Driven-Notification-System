@@ -20,6 +20,7 @@ type fakeQueue struct {
 	recordErr error
 	stale     bool              // results report ok=false, as if claimed again meanwhile
 	tried     []domain.Priority // every ClaimNext call, in order
+	channels  []domain.Channel  // the channel of every ClaimNext call
 	claimed   []domain.Priority // the successful ones
 	lease     time.Duration
 	results   []string // "sent:<messageId>", "failed:<error>" or "released"
@@ -65,8 +66,9 @@ func (s *fakeSender) Send(_ context.Context, m provider.Message) (provider.Recei
 	return provider.Receipt{MessageID: "msg-1", Status: "accepted"}, nil
 }
 
-func (q *fakeQueue) ClaimNext(_ context.Context, p domain.Priority, lease time.Duration) (domain.Notification, bool, error) {
+func (q *fakeQueue) ClaimNext(_ context.Context, ch domain.Channel, p domain.Priority, lease time.Duration) (domain.Notification, bool, error) {
 	q.tried = append(q.tried, p)
+	q.channels = append(q.channels, ch)
 	q.lease = lease
 	if q.err != nil {
 		return domain.Notification{}, false, q.err
@@ -76,11 +78,11 @@ func (q *fakeQueue) ClaimNext(_ context.Context, p domain.Priority, lease time.D
 	}
 	q.due[p]--
 	q.claimed = append(q.claimed, p)
-	return domain.Notification{ID: uuid.New(), Priority: p, Status: domain.StatusProcessing, Attempts: 1}, true, nil
+	return domain.Notification{ID: uuid.New(), Channel: ch, Priority: p, Status: domain.StatusProcessing, Attempts: 1}, true, nil
 }
 
 func newTestDispatcher(q *fakeQueue) *Dispatcher {
-	return NewDispatcher(q, &fakeSender{}, time.Minute, slog.New(slog.DiscardHandler))
+	return NewDispatcher(domain.ChannelSMS, q, &fakeSender{}, time.Minute, slog.New(slog.DiscardHandler))
 }
 
 // count tallies claims per priority.
@@ -142,6 +144,26 @@ func TestProcessNext_FallsBackWhenPreferredIsEmpty(t *testing.T) {
 	}
 }
 
+// A dispatcher only ever claims its own channel (D16).
+func TestProcessNext_ClaimsOnlyItsChannel(t *testing.T) {
+	q := &fakeQueue{due: map[domain.Priority]int{domain.PriorityLow: 1}}
+	d := NewDispatcher(domain.ChannelEmail, q, &fakeSender{}, time.Minute, slog.New(slog.DiscardHandler))
+
+	for range 2 { // one claim, then an empty queue
+		if _, err := d.ProcessNext(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, ch := range q.channels {
+		if ch != domain.ChannelEmail {
+			t.Fatalf("claimed channels %v, want only email", q.channels)
+		}
+	}
+	if len(q.channels) == 0 {
+		t.Fatal("no claims made")
+	}
+}
+
 func TestProcessNext_EmptyQueue(t *testing.T) {
 	q := &fakeQueue{due: map[domain.Priority]int{}}
 	found, err := newTestDispatcher(q).ProcessNext(t.Context())
@@ -172,7 +194,7 @@ func oneDue() *fakeQueue {
 
 func TestDeliver_Sent(t *testing.T) {
 	q, s := oneDue(), &fakeSender{}
-	found, err := NewDispatcher(q, s, time.Minute, slog.New(slog.DiscardHandler)).ProcessNext(t.Context())
+	found, err := NewDispatcher(domain.ChannelSMS, q, s, time.Minute, slog.New(slog.DiscardHandler)).ProcessNext(t.Context())
 	if !found || err != nil {
 		t.Fatalf("ProcessNext = %v, %v", found, err)
 	}
@@ -199,7 +221,7 @@ func TestDeliver_MapsTheNotification(t *testing.T) {
 func TestDeliver_Failed(t *testing.T) {
 	q := oneDue()
 	s := &fakeSender{err: &provider.Error{StatusCode: 503, Err: errors.New("Service Unavailable")}}
-	if _, err := NewDispatcher(q, s, time.Minute, slog.New(slog.DiscardHandler)).ProcessNext(t.Context()); err != nil {
+	if _, err := NewDispatcher(domain.ChannelSMS, q, s, time.Minute, slog.New(slog.DiscardHandler)).ProcessNext(t.Context()); err != nil {
 		t.Fatalf("ProcessNext: %v (a provider failure is recorded, not returned)", err)
 	}
 	if len(q.results) != 1 || q.results[0] != "failed:provider: status 503: Service Unavailable" {
@@ -213,7 +235,7 @@ func TestDeliver_CutOffByShutdown(t *testing.T) {
 	q := oneDue()
 	s := &fakeSender{before: cancel, err: context.Canceled}
 
-	if _, err := NewDispatcher(q, s, time.Minute, slog.New(slog.DiscardHandler)).ProcessNext(ctx); err != nil {
+	if _, err := NewDispatcher(domain.ChannelSMS, q, s, time.Minute, slog.New(slog.DiscardHandler)).ProcessNext(ctx); err != nil {
 		t.Fatalf("ProcessNext: %v", err)
 	}
 	if len(q.results) != 1 || q.results[0] != "released" {
@@ -230,7 +252,7 @@ func TestDeliver_RecordsSentDuringShutdown(t *testing.T) {
 	q := oneDue()
 	s := &fakeSender{before: cancel} // cancelled, but the provider still answered 202
 
-	if _, err := NewDispatcher(q, s, time.Minute, slog.New(slog.DiscardHandler)).ProcessNext(ctx); err != nil {
+	if _, err := NewDispatcher(domain.ChannelSMS, q, s, time.Minute, slog.New(slog.DiscardHandler)).ProcessNext(ctx); err != nil {
 		t.Fatalf("ProcessNext: %v", err)
 	}
 	if len(q.results) != 1 || q.results[0] != "sent:msg-1" || q.recordCtx != nil {

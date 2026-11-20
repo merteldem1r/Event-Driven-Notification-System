@@ -35,6 +35,9 @@ const (
 	ChannelPush  Channel = "push"
 )
 
+// Channels returns every supported channel, e.g. to run workers for each.
+func Channels() []Channel { return []Channel{ChannelSMS, ChannelEmail, ChannelPush} }
+
 // Priority decides the processing order; a lower number goes first.
 type Priority int16
 

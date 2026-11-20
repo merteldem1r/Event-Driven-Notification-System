@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -730,13 +731,19 @@ func clearQueue(t *testing.T) {
 	}
 }
 
-// insertQueued stores a notification with a chosen priority, due time and status.
+// insertQueued stores an SMS notification with a chosen priority, due time and status.
 func insertQueued(t *testing.T, p domain.Priority, nextAttemptAt time.Time, status domain.Status) uuid.UUID {
+	t.Helper()
+	return insertQueuedOn(t, domain.ChannelSMS, p, nextAttemptAt, status)
+}
+
+// insertQueuedOn is insertQueued for a chosen channel.
+func insertQueuedOn(t *testing.T, ch domain.Channel, p domain.Priority, nextAttemptAt time.Time, status domain.Status) uuid.UUID {
 	t.Helper()
 	var id uuid.UUID
 	err := testDB.QueryRow(t.Context(), `
 		INSERT INTO notifications (channel, recipient, content, priority, status, next_attempt_at)
-		VALUES ('sms', 'r', 'c', $1, $2, $3) RETURNING id`, p, status, nextAttemptAt).Scan(&id)
+		VALUES ($1, 'r', 'c', $2, $3, $4) RETURNING id`, ch, p, status, nextAttemptAt).Scan(&id)
 	if err != nil {
 		t.Fatalf("insert: %v", err)
 	}
@@ -756,7 +763,7 @@ func TestClaimNext(t *testing.T) {
 
 	// High: oldest due first; the future and the sent rows are never taken.
 	for _, want := range []uuid.UUID{older, newer} {
-		n, ok, err := repo.ClaimNext(t.Context(), domain.PriorityHigh, time.Minute)
+		n, ok, err := repo.ClaimNext(t.Context(), domain.ChannelSMS, domain.PriorityHigh, time.Minute)
 		if err != nil || !ok || n.ID != want {
 			t.Fatalf("claim = %s, %v, %v; want %s", n.ID, ok, err, want)
 		}
@@ -764,12 +771,12 @@ func TestClaimNext(t *testing.T) {
 			t.Errorf("claimed row: status %s, attempts %d; want processing, 1", n.Status, n.Attempts)
 		}
 	}
-	if _, ok, err := repo.ClaimNext(t.Context(), domain.PriorityHigh, time.Minute); err != nil || ok {
+	if _, ok, err := repo.ClaimNext(t.Context(), domain.ChannelSMS, domain.PriorityHigh, time.Minute); err != nil || ok {
 		t.Errorf("third high claim: ok %v, err %v; want nothing due", ok, err)
 	}
 
 	// Each priority is its own queue.
-	if n, ok, _ := repo.ClaimNext(t.Context(), domain.PriorityNormal, time.Minute); !ok || n.ID != normal {
+	if n, ok, _ := repo.ClaimNext(t.Context(), domain.ChannelSMS, domain.PriorityNormal, time.Minute); !ok || n.ID != normal {
 		t.Errorf("normal claim = %s, %v; want %s", n.ID, ok, normal)
 	}
 
@@ -782,6 +789,61 @@ func TestClaimNext(t *testing.T) {
 	}
 	if leaseLeft < 50*time.Second || leaseLeft > time.Minute {
 		t.Errorf("lease left = %v, want just under 1m", leaseLeft)
+	}
+}
+
+// A claim only takes its own channel, so each channel is its own queue (D16).
+func TestClaimNext_OnlyItsChannel(t *testing.T) {
+	clearQueue(t)
+	repo := NewNotifications(testDB)
+	due := time.Now().Add(-time.Minute)
+
+	email := insertQueuedOn(t, domain.ChannelEmail, domain.PriorityHigh, due, domain.StatusPending)
+	push := insertQueuedOn(t, domain.ChannelPush, domain.PriorityHigh, due.Add(time.Second), domain.StatusPending)
+
+	// Only email and push are due: an SMS claim finds nothing.
+	if n, ok, err := repo.ClaimNext(t.Context(), domain.ChannelSMS, domain.PriorityHigh, time.Minute); err != nil || ok {
+		t.Fatalf("sms claim = %s, %v, %v; want nothing due", n.ID, ok, err)
+	}
+	for ch, want := range map[domain.Channel]uuid.UUID{domain.ChannelEmail: email, domain.ChannelPush: push} {
+		n, ok, err := repo.ClaimNext(t.Context(), ch, domain.PriorityHigh, time.Minute)
+		if err != nil || !ok || n.ID != want || n.Channel != ch {
+			t.Errorf("%s claim = %s (%s), %v, %v; want %s", ch, n.ID, n.Channel, ok, err, want)
+		}
+	}
+}
+
+// The claim query uses the channel queue index, not a scan of the whole table.
+func TestClaimNext_UsesChannelQueueIndex(t *testing.T) {
+	tx, err := testDB.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(t.Context()) }() // only reads; nothing to keep
+	// Tiny test tables would make a full scan look cheapest, so take it off the table.
+	if _, err := tx.Exec(t.Context(), `SET LOCAL enable_seqscan = off`); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := tx.Query(t.Context(), `
+		EXPLAIN SELECT id FROM notifications
+		WHERE status = 'pending' AND channel = 'sms' AND priority = 1 AND next_attempt_at <= now()
+		ORDER BY next_attempt_at LIMIT 1 FOR UPDATE SKIP LOCKED`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plan strings.Builder
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			t.Fatal(err)
+		}
+		plan.WriteString(line + "\n")
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plan.String(), "notifications_channel_queue_idx") {
+		t.Errorf("claim plan doesn't use notifications_channel_queue_idx:\n%s", plan.String())
 	}
 }
 
@@ -802,7 +864,7 @@ func TestClaimNext_ConcurrentClaimsNeverOverlap(t *testing.T) {
 		wg.Go(func() {
 			<-start
 			for {
-				n, ok, err := repo.ClaimNext(t.Context(), domain.PriorityNormal, time.Minute)
+				n, ok, err := repo.ClaimNext(t.Context(), domain.ChannelSMS, domain.PriorityNormal, time.Minute)
 				if err != nil {
 					t.Errorf("claim: %v", err)
 					return
@@ -834,7 +896,7 @@ func claimOne(t *testing.T) domain.Notification {
 	t.Helper()
 	clearQueue(t)
 	insertQueued(t, domain.PriorityNormal, time.Now().Add(-time.Second), domain.StatusPending)
-	n, ok, err := NewNotifications(testDB).ClaimNext(t.Context(), domain.PriorityNormal, time.Minute)
+	n, ok, err := NewNotifications(testDB).ClaimNext(t.Context(), domain.ChannelSMS, domain.PriorityNormal, time.Minute)
 	if err != nil || !ok {
 		t.Fatalf("claim: %v, %v", ok, err)
 	}
@@ -884,7 +946,7 @@ func TestRecordResults(t *testing.T) {
 			t.Fatalf("Release = %v, %v", ok, err)
 		}
 		// It is due again: the next claim gets it.
-		again, ok, err := repo.ClaimNext(t.Context(), domain.PriorityNormal, time.Minute)
+		again, ok, err := repo.ClaimNext(t.Context(), domain.ChannelSMS, domain.PriorityNormal, time.Minute)
 		if err != nil || !ok || again.ID != n.ID || again.Attempts != 2 {
 			t.Errorf("claim after release = %s (attempt %d), %v, %v; want the same notification, attempt 2",
 				again.ID, again.Attempts, ok, err)

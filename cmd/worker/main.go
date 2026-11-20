@@ -12,6 +12,7 @@ import (
 
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/config"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/database"
+	"github.com/merteldem1r/Event-Driven-Notification-System/internal/domain"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/logging"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/provider"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/repository"
@@ -60,13 +61,15 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Wire the layers: repository (the queue) + provider client -> dispatcher -> worker loops.
-	dispatcher := service.NewDispatcher(
-		repository.NewNotifications(db),
-		provider.NewClient(cfg.ProviderURL, cfg.ProviderTimeout),
-		cfg.WorkerLeaseDuration, logger,
-	)
-	w := worker.New(dispatcher, worker.Config{
+	// Wire the layers: repository (the queue) + provider client -> one dispatcher per channel
+	// -> worker loops for each (D16).
+	queue := repository.NewNotifications(db)
+	sender := provider.NewClient(cfg.ProviderURL, cfg.ProviderTimeout)
+	var dispatchers []worker.Processor
+	for _, ch := range domain.Channels() {
+		dispatchers = append(dispatchers, service.NewDispatcher(ch, queue, sender, cfg.WorkerLeaseDuration, logger))
+	}
+	w := worker.New(dispatchers, worker.Config{
 		Concurrency:     cfg.WorkerConcurrency,
 		PollInterval:    cfg.WorkerPollInterval,
 		ShutdownTimeout: cfg.WorkerShutdownTimeout,

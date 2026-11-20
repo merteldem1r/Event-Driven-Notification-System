@@ -14,7 +14,7 @@ func TestLoad(t *testing.T) {
 	// withDefaults fills in the worker defaults, so cases only spell out what they change.
 	withDefaults := func(c Config) Config {
 		if c.WorkerConcurrency == 0 {
-			c.WorkerConcurrency = 30
+			c.WorkerConcurrency = 10
 		}
 		if c.WorkerPollInterval == 0 {
 			c.WorkerPollInterval = 500 * time.Millisecond

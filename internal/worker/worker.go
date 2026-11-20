@@ -22,21 +22,22 @@ type Processor interface {
 
 // Config controls the loops.
 type Config struct {
-	Concurrency     int           // loops running in parallel
+	Concurrency     int           // loops running in parallel for each processor
 	PollInterval    time.Duration // wait after an empty queue or an error
 	ShutdownTimeout time.Duration // time in-flight work gets after Run's context is cancelled
 }
 
-// Worker runs Config.Concurrency loops, each calling the Processor again and again.
+// Worker runs Config.Concurrency loops for each processor, each loop calling its processor
+// again and again. The worker program has one processor per channel (D16).
 type Worker struct {
-	proc   Processor
+	procs  []Processor
 	cfg    Config
 	logger *slog.Logger
 }
 
 // New returns a Worker. cfg is expected to be valid (config.Load checks it).
-func New(proc Processor, cfg Config, logger *slog.Logger) *Worker {
-	return &Worker{proc: proc, cfg: cfg, logger: logger}
+func New(procs []Processor, cfg Config, logger *slog.Logger) *Worker {
+	return &Worker{procs: procs, cfg: cfg, logger: logger}
 }
 
 // Run processes notifications until ctx is cancelled, then shuts down gracefully: no new
@@ -48,10 +49,14 @@ func (w *Worker) Run(ctx context.Context) error {
 	defer cancelWork()
 
 	var wg sync.WaitGroup
-	for i := range w.cfg.Concurrency {
-		wg.Go(func() { w.loop(ctx, work, i) })
+	for p, proc := range w.procs {
+		for i := range w.cfg.Concurrency {
+			id := p*w.cfg.Concurrency + i // unique across processors, for the logs
+			wg.Go(func() { w.loop(ctx, work, proc, id) })
+		}
 	}
-	w.logger.Info("worker started", "concurrency", w.cfg.Concurrency, "poll_interval", w.cfg.PollInterval.String()) // "500ms", not nanoseconds
+	w.logger.Info("worker started", "processors", len(w.procs), "loops_per_processor", w.cfg.Concurrency,
+		"poll_interval", w.cfg.PollInterval.String()) // "500ms", not nanoseconds
 
 	<-ctx.Done()
 	w.logger.Info("worker stopping: finishing in-flight work", "timeout", w.cfg.ShutdownTimeout.String())
@@ -75,11 +80,11 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 }
 
-// loop processes one notification after another until stop is cancelled.
+// loop has proc process one notification after another until stop is cancelled.
 // stop decides whether to take more work; work is passed to the processor.
-func (w *Worker) loop(stop, work context.Context, id int) {
+func (w *Worker) loop(stop, work context.Context, proc Processor, id int) {
 	for stop.Err() == nil {
-		found, err := w.proc.ProcessNext(work)
+		found, err := proc.ProcessNext(work)
 		if err != nil {
 			w.logger.ErrorContext(work, "processing failed", "loop", id, "error", err)
 		}

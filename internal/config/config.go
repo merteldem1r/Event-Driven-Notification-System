@@ -20,7 +20,7 @@ type Config struct {
 	LogLevel    slog.Level
 	DatabaseURL string
 
-	WorkerConcurrency     int           // notifications processed in parallel per worker process
+	WorkerConcurrency     int           // loops per channel in each worker process
 	WorkerPollInterval    time.Duration // idle wait before checking the queue again
 	WorkerShutdownTimeout time.Duration // time in-flight work gets after a stop signal
 	WorkerLeaseDuration   time.Duration // how long a claimed notification belongs to its worker
@@ -33,7 +33,7 @@ type Config struct {
 	RateLimitBurst     int    // sends allowed at once after an idle moment
 }
 
-// MaxWorkerConcurrency caps WORKER_CONCURRENCY; more loops than this only add database load.
+// MaxWorkerConcurrency caps WORKER_CONCURRENCY (loops per channel); more only add database load.
 const MaxWorkerConcurrency = 1000
 
 // MaxRateLimitPerSecond caps RATE_LIMIT_PER_SECOND, a sanity bound well above the required 100.
@@ -66,7 +66,7 @@ func Load() (Config, error) {
 		return Config{}, errors.New("DATABASE_URL is required")
 	}
 
-	concurrency, err := strconv.Atoi(getEnv("WORKER_CONCURRENCY", "30"))
+	concurrency, err := strconv.Atoi(getEnv("WORKER_CONCURRENCY", "10"))
 	if err != nil || concurrency < 1 || concurrency > MaxWorkerConcurrency {
 		return Config{}, fmt.Errorf("WORKER_CONCURRENCY must be a number from 1 to %d", MaxWorkerConcurrency)
 	}
