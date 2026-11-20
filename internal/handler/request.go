@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // Body size caps; the largest valid request of each kind is well below them.
@@ -41,6 +42,28 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any, limit int64) bo
 	return true
 }
 
+// errBadScheduleTime is returned while decoding a scheduled_at that isn't an RFC 3339 time.
+var errBadScheduleTime = errors.New(`field "scheduled_at" must be an RFC 3339 time with a time zone, ` +
+	`e.g. "2026-11-21T09:00:00Z" or "2026-11-21T12:00:00+03:00"`)
+
+// scheduleTime is the scheduled_at field of a request. It exists only to give a clear message
+// for a malformed time; encoding/json would report it without the field name.
+type scheduleTime struct{ time.Time }
+
+// UnmarshalJSON accepts a JSON string in RFC 3339 format with a time zone.
+func (t *scheduleTime) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return errBadScheduleTime
+	}
+	v, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return errBadScheduleTime
+	}
+	t.Time = v
+	return nil
+}
+
 // bodyErrorMessage turns a JSON decoding error into a message for the client,
 // without exposing Go type names.
 func bodyErrorMessage(err error) string {
@@ -49,6 +72,8 @@ func bodyErrorMessage(err error) string {
 	switch {
 	case errors.Is(err, io.EOF):
 		return "request body is empty"
+	case errors.Is(err, errBadScheduleTime):
+		return err.Error()
 	case errors.As(err, &syntaxErr):
 		return fmt.Sprintf("malformed JSON at position %d", syntaxErr.Offset)
 	case errors.Is(err, io.ErrUnexpectedEOF):

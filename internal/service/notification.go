@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -27,11 +28,12 @@ type NotificationStore interface {
 // Notifications implements the notification use cases.
 type Notifications struct {
 	store NotificationStore
+	now   func() time.Time // the clock for validating scheduled times; replaced in tests
 }
 
 // NewNotifications returns the notification use cases backed by store.
 func NewNotifications(store NotificationStore) *Notifications {
-	return &Notifications{store: store}
+	return &Notifications{store: store, now: time.Now}
 }
 
 // Create validates n and saves it. Saving also queues it for sending.
@@ -40,7 +42,7 @@ func NewNotifications(store NotificationStore) *Notifications {
 // Invalid input returns a *domain.ValidationError; a key reused for a different request
 // returns domain.ErrIdempotencyKeyReused.
 func (s *Notifications) Create(ctx context.Context, n domain.Notification) (_ domain.Notification, replayed bool, _ error) {
-	if err := n.Validate(); err != nil {
+	if err := n.Validate(s.now()); err != nil {
 		return domain.Notification{}, false, err
 	}
 
@@ -61,7 +63,7 @@ func (s *Notifications) Create(ctx context.Context, n domain.Notification) (_ do
 func (s *Notifications) CreateBatch(
 	ctx context.Context, ns []domain.Notification, idempotencyKey *string,
 ) (_ domain.Batch, replayed bool, _ error) {
-	if err := domain.ValidateBatch(ns, idempotencyKey); err != nil {
+	if err := domain.ValidateBatch(ns, idempotencyKey, s.now()); err != nil {
 		return domain.Batch{}, false, err
 	}
 

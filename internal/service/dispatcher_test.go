@@ -23,6 +23,7 @@ type fakeQueue struct {
 	stale     bool              // results report ok=false, as if claimed again meanwhile
 	attempt   int               // attempt number of claimed notifications; 0 means 1
 	createdAt time.Time         // created_at of claimed notifications
+	scheduled *time.Time        // scheduled_at of claimed notifications
 	tried     []domain.Priority // every ClaimNext call, in order
 	channels  []domain.Channel  // the channel of every ClaimNext call
 	claimed   []domain.Priority // the successful ones
@@ -90,7 +91,7 @@ func (q *fakeQueue) ClaimNext(_ context.Context, ch domain.Channel, p domain.Pri
 	}
 	q.due[p]--
 	q.claimed = append(q.claimed, p)
-	return domain.Notification{ID: uuid.New(), Channel: ch, Priority: p, Status: domain.StatusProcessing, Attempts: max(q.attempt, 1), CreatedAt: q.createdAt}, true, nil
+	return domain.Notification{ID: uuid.New(), Channel: ch, Priority: p, Status: domain.StatusProcessing, Attempts: max(q.attempt, 1), CreatedAt: q.createdAt, ScheduledAt: q.scheduled}, true, nil
 }
 
 // fakeRecorder keeps what the dispatcher reported, as "<channel>:<result>" and delivery times.
@@ -478,5 +479,21 @@ func TestDeliver_ReportsMetrics(t *testing.T) {
 				t.Errorf("delivered after %v, want about 3s since creation", m.delivered[0])
 			}
 		})
+	}
+}
+
+// A scheduled notification's delivery time counts from its scheduled time, not its creation.
+func TestDeliver_DeliveryTimeFromScheduledTime(t *testing.T) {
+	q := oneDue()
+	q.createdAt = time.Now().Add(-time.Hour)            // created an hour ago
+	q.scheduled = ptr(time.Now().Add(-2 * time.Second)) // for two seconds ago
+	m := &fakeRecorder{}
+	d := NewDispatcher(domain.ChannelSMS, q, &fakeSender{}, &fakeLimiter{}, fakeRetries{max: 5}, m, time.Minute,
+		slog.New(slog.DiscardHandler))
+	if _, err := d.ProcessNext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.delivered) != 1 || m.delivered[0] < 2*time.Second || m.delivered[0] > 3*time.Second {
+		t.Errorf("delivered = %v, want about 2s since the scheduled time", m.delivered)
 	}
 }

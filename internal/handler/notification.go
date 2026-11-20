@@ -35,6 +35,8 @@ type createNotificationRequest struct {
 	Recipient string `json:"recipient"`
 	Content   string `json:"content"`
 	Priority  string `json:"priority"` // optional: high, normal (default) or low
+
+	ScheduledAt *scheduleTime `json:"scheduled_at"` // optional: send at this time (D21)
 }
 
 // toDomain maps the request to a notification, applying the priority default (D4).
@@ -44,11 +46,17 @@ func (req createNotificationRequest) toDomain() domain.Notification {
 	if req.Priority != "" {
 		priority = domain.ParsePriority(req.Priority)
 	}
+	var scheduledAt *time.Time
+	if req.ScheduledAt != nil {
+		t := req.ScheduledAt.Time
+		scheduledAt = &t
+	}
 	return domain.Notification{
-		Channel:   domain.Channel(req.Channel),
-		Recipient: req.Recipient,
-		Content:   req.Content,
-		Priority:  priority,
+		Channel:     domain.Channel(req.Channel),
+		Recipient:   req.Recipient,
+		Content:     req.Content,
+		Priority:    priority,
+		ScheduledAt: scheduledAt,
 	}
 }
 
@@ -123,6 +131,7 @@ type notificationResponse struct {
 	Priority          string     `json:"priority"`
 	Status            string     `json:"status"`
 	Attempts          int        `json:"attempts"`
+	ScheduledAt       *time.Time `json:"scheduled_at,omitempty"`
 	LastError         *string    `json:"last_error,omitempty"`
 	NextAttemptAt     *time.Time `json:"next_attempt_at,omitempty"` // only while a retry is waiting
 	ProviderMessageID *string    `json:"provider_message_id,omitempty"`
@@ -146,6 +155,7 @@ func toNotificationResponse(n domain.Notification) notificationResponse {
 		Priority:          n.Priority.String(),
 		Status:            string(n.Status),
 		Attempts:          n.Attempts,
+		ScheduledAt:       utc(n.ScheduledAt),
 		LastError:         n.LastError,
 		NextAttemptAt:     next,
 		ProviderMessageID: n.ProviderMessageID,
@@ -153,6 +163,15 @@ func toNotificationResponse(n domain.Notification) notificationResponse {
 		CreatedAt:         n.CreatedAt.UTC(), // same time zone for every client
 		UpdatedAt:         n.UpdatedAt.UTC(),
 	}
+}
+
+// utc returns t in UTC, or nil.
+func utc(t *time.Time) *time.Time {
+	if t == nil {
+		return nil
+	}
+	u := t.UTC()
+	return &u
 }
 
 // CreateNotification handles POST /api/v1/notifications: it validates and queues one notification.

@@ -86,6 +86,9 @@ func TestOpenAPI_ResponsesMatchSpec(t *testing.T) {
 		headers []string
 	}{
 		{"create: accepted", http.MethodPost, "/api/v1/notifications", validBody, &fakeNotificationService{}, nil},
+		{"create: scheduled", http.MethodPost, "/api/v1/notifications",
+			`{"channel":"sms","recipient":"+905551234567","content":"hi","scheduled_at":"2026-11-21T09:00:00Z"}`,
+			&fakeNotificationService{}, nil},
 		{"create: replayed", http.MethodPost, "/api/v1/notifications", validBody,
 			&fakeNotificationService{replayed: true}, []string{"Idempotency-Key", "order-1042"}},
 		{"create: validation failed", http.MethodPost, "/api/v1/notifications", validBody,

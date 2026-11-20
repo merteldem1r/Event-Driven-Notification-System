@@ -92,6 +92,8 @@ type Notification struct {
 	Content   string
 	Priority  Priority
 
+	ScheduledAt *time.Time // send at this time instead of as soon as possible; nil means now
+
 	Status            Status
 	Attempts          int
 	NextAttemptAt     time.Time
@@ -132,6 +134,8 @@ const (
 	MaxIdempotencyKeyLength = 255 // D12
 
 	MaxBatchSize = 1000 // notifications per batch request
+
+	MaxScheduleAhead = 30 * 24 * time.Hour // how far ahead a notification may be scheduled (D21)
 
 	DefaultListLimit = 50 // page size when the client doesn't choose one
 	MaxListLimit     = 100
@@ -184,7 +188,8 @@ func (e *ValidationError) Error() string {
 }
 
 // Validate checks the fields a client provides and returns a *ValidationError if any are invalid.
-func (n Notification) Validate() error {
+// now is the current time, for checking ScheduledAt.
+func (n Notification) Validate(now time.Time) error {
 	var errs []FieldError
 	add := func(field, msg string) { errs = append(errs, FieldError{Field: field, Message: msg}) }
 
@@ -213,6 +218,15 @@ func (n Notification) Validate() error {
 		add("priority", "must be high, normal or low")
 	}
 
+	if n.ScheduledAt != nil {
+		switch {
+		case !n.ScheduledAt.After(now): // a past time is more likely a time zone mistake than "now" (D21)
+			add("scheduled_at", "must be in the future")
+		case n.ScheduledAt.Sub(now) > MaxScheduleAhead:
+			add("scheduled_at", fmt.Sprintf("must be at most %d days ahead", MaxScheduleAhead/(24*time.Hour)))
+		}
+	}
+
 	if n.IdempotencyKey != nil && !validIdempotencyKey(*n.IdempotencyKey) {
 		add(invalidKeyError.Field, invalidKeyError.Message)
 	}
@@ -226,7 +240,7 @@ func (n Notification) Validate() error {
 // ValidateBatch checks every notification of a batch and the batch's optional idempotency key.
 // One invalid item makes the whole batch invalid (D5). Field names say which item,
 // e.g. "notifications[3].recipient".
-func ValidateBatch(ns []Notification, idempotencyKey *string) error {
+func ValidateBatch(ns []Notification, idempotencyKey *string, now time.Time) error {
 	var errs []FieldError
 	if len(ns) == 0 || len(ns) > MaxBatchSize {
 		errs = append(errs, FieldError{
@@ -235,7 +249,7 @@ func ValidateBatch(ns []Notification, idempotencyKey *string) error {
 	} else {
 		for i, n := range ns {
 			var ve *ValidationError
-			if errors.As(n.Validate(), &ve) {
+			if errors.As(n.Validate(now), &ve) {
 				for _, f := range ve.Fields {
 					errs = append(errs, FieldError{Field: fmt.Sprintf("notifications[%d].%s", i, f.Field), Message: f.Message})
 				}
@@ -290,7 +304,25 @@ func (n Notification) SameRequest(other Notification) bool {
 	return n.Channel == other.Channel &&
 		n.Recipient == other.Recipient &&
 		n.Content == other.Content &&
-		n.Priority == other.Priority
+		n.Priority == other.Priority &&
+		sameTime(n.ScheduledAt, other.ScheduledAt)
+}
+
+// sameTime compares optional times to the microsecond, the precision PostgreSQL stores.
+func sameTime(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Truncate(time.Microsecond).Equal(b.Truncate(time.Microsecond))
+}
+
+// DueAt is when the notification was first meant to go out: its scheduled time, or its creation.
+// Delivery time is measured from here, so a scheduled wait doesn't count as delay.
+func (n Notification) DueAt() time.Time {
+	if n.ScheduledAt != nil && n.ScheduledAt.After(n.CreatedAt) {
+		return *n.ScheduledAt
+	}
+	return n.CreatedAt
 }
 
 // Cursor marks a position in the newest-first list: the last notification of a page.

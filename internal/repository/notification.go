@@ -17,7 +17,7 @@ import (
 
 // notificationColumns is the column list every query returns, in scanNotification order.
 const notificationColumns = `id, batch_id, idempotency_key, correlation_id,
-	channel, recipient, content, priority,
+	channel, recipient, content, priority, scheduled_at,
 	status, attempts, next_attempt_at, last_error, provider_message_id,
 	created_at, updated_at`
 
@@ -36,15 +36,18 @@ func NewNotifications(db *pgxpool.Pool) *Notifications {
 // If its idempotency key is already taken, nothing is saved and domain.ErrIdempotencyKeyExists is returned.
 func (r *Notifications) Create(ctx context.Context, n domain.Notification) (domain.Notification, error) {
 	// The database fills in id, status, attempts and the timestamps from column defaults.
+	// A scheduled notification is first due at its scheduled time, any other one right away.
 	// ON CONFLICT lets the unique index decide atomically which of two same-key requests wins.
 	// Unlike a failing INSERT, it also doesn't abort a surrounding transaction (needed for batches).
 	row := r.db.QueryRow(ctx, `
 		INSERT INTO notifications
-			(batch_id, idempotency_key, correlation_id, channel, recipient, content, priority)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+			(batch_id, idempotency_key, correlation_id, channel, recipient, content, priority,
+			 scheduled_at, next_attempt_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($8, now()))
 		ON CONFLICT (idempotency_key) DO NOTHING
 		RETURNING `+notificationColumns,
 		n.BatchID, n.IdempotencyKey, n.CorrelationID, n.Channel, n.Recipient, n.Content, n.Priority,
+		n.ScheduledAt,
 	)
 
 	created, err := scanNotification(row)
@@ -71,6 +74,7 @@ func (r *Notifications) CreateBatch(ctx context.Context, ns []domain.Notificatio
 	recipients := make([]string, len(ns))
 	contents := make([]string, len(ns))
 	priorities := make([]int16, len(ns))
+	scheduled := make([]pgtype.Timestamptz, len(ns))
 	for i, n := range ns {
 		ids[i] = uuid.New()
 		if n.IdempotencyKey != nil {
@@ -81,6 +85,9 @@ func (r *Notifications) CreateBatch(ctx context.Context, ns []domain.Notificatio
 		}
 		if n.CorrelationID != nil {
 			correlationIDs[i] = pgtype.Text{String: *n.CorrelationID, Valid: true}
+		}
+		if n.ScheduledAt != nil {
+			scheduled[i] = pgtype.Timestamptz{Time: *n.ScheduledAt, Valid: true}
 		}
 		channels[i], recipients[i], contents[i], priorities[i] = string(n.Channel), n.Recipient, n.Content, int16(n.Priority)
 	}
@@ -94,11 +101,15 @@ func (r *Notifications) CreateBatch(ctx context.Context, ns []domain.Notificatio
 
 	// ON CONFLICT skips rows whose key is taken; a concurrent same-key batch waits here for ours.
 	rows, err := tx.Query(ctx, `
-		INSERT INTO notifications (id, idempotency_key, batch_id, correlation_id, channel, recipient, content, priority)
-		SELECT * FROM unnest($1::uuid[], $2::text[], $3::uuid[], $4::text[], $5::text[], $6::text[], $7::text[], $8::smallint[])
+		INSERT INTO notifications (id, idempotency_key, batch_id, correlation_id, channel, recipient, content, priority,
+			scheduled_at, next_attempt_at)
+		SELECT u.*, COALESCE(u.scheduled_at, now())
+		FROM unnest($1::uuid[], $2::text[], $3::uuid[], $4::text[], $5::text[], $6::text[], $7::text[], $8::smallint[],
+			$9::timestamptz[]) AS u(id, idempotency_key, batch_id, correlation_id, channel, recipient, content, priority,
+			scheduled_at)
 		ON CONFLICT (idempotency_key) DO NOTHING
 		RETURNING `+notificationColumns,
-		ids, keys, batchIDs, correlationIDs, channels, recipients, contents, priorities,
+		ids, keys, batchIDs, correlationIDs, channels, recipients, contents, priorities, scheduled,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("insert batch: %w", err)
@@ -441,7 +452,7 @@ func scanNotification(row pgx.Row) (domain.Notification, error) {
 	var n domain.Notification
 	err := row.Scan(
 		&n.ID, &n.BatchID, &n.IdempotencyKey, &n.CorrelationID,
-		&n.Channel, &n.Recipient, &n.Content, &n.Priority,
+		&n.Channel, &n.Recipient, &n.Content, &n.Priority, &n.ScheduledAt,
 		&n.Status, &n.Attempts, &n.NextAttemptAt, &n.LastError, &n.ProviderMessageID,
 		&n.CreatedAt, &n.UpdatedAt,
 	)

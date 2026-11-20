@@ -29,8 +29,8 @@ type Queue interface {
 type Recorder interface {
 	// SendDone records one provider call: how it ended and how long the provider took.
 	SendDone(ch domain.Channel, result domain.SendResult, took time.Duration)
-	// Delivered records the time from creating a notification to it being sent.
-	Delivered(ch domain.Channel, sinceCreated time.Duration)
+	// Delivered records the time from a notification being due (created or scheduled) to it being sent.
+	Delivered(ch domain.Channel, sinceDue time.Duration)
 }
 
 // Retries decides what follows a temporary failure (D8): after failed attempt number attempt,
@@ -144,7 +144,7 @@ func (d *Dispatcher) deliver(ctx context.Context, n domain.Notification) error {
 	switch {
 	case sendErr == nil:
 		d.metrics.SendDone(n.Channel, domain.SendSent, took)
-		d.metrics.Delivered(n.Channel, time.Since(n.CreatedAt))
+		d.metrics.Delivered(n.Channel, time.Since(n.DueAt()))
 		recorded, err = d.queue.MarkSent(rec, n.ID, n.Attempts, receipt.MessageID)
 		log.InfoContext(ctx, "notification sent", "provider_message_id", receipt.MessageID, "duration_ms", took.Milliseconds())
 	case ctx.Err() != nil: // we gave up at the shutdown deadline; the provider didn't fail

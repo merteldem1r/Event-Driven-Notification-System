@@ -32,7 +32,7 @@ func NewSends(reg prometheus.Registerer) *Sends {
 		}, []string{"channel"}),
 		delivery: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name: "notifications_delivery_duration_seconds",
-			Help: "Time from creating a notification to it being sent, including queue time and retries.",
+			Help: "Time from a notification being due (created, or its scheduled time) to it being sent, including queue time and retries.",
 			// 100 ms to 30 min: a backlog or retries (minutes, D8) show up here.
 			Buckets: []float64{0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600, 1800},
 		}, []string{"channel"}),
@@ -61,9 +61,9 @@ func (m *Sends) SendDone(ch domain.Channel, result domain.SendResult, took time.
 	}
 }
 
-// Delivered records the time from creation to sent.
-func (m *Sends) Delivered(ch domain.Channel, sinceCreated time.Duration) {
-	m.delivery.WithLabelValues(string(ch)).Observe(sinceCreated.Seconds())
+// Delivered records the time from being due to sent.
+func (m *Sends) Delivered(ch domain.Channel, sinceDue time.Duration) {
+	m.delivery.WithLabelValues(string(ch)).Observe(sinceDue.Seconds())
 }
 
 // LeaseRecoverer takes back expired leases (the worker's sweep, RET-5).

@@ -1083,3 +1083,61 @@ func TestQueueStats(t *testing.T) {
 		t.Errorf("email pending = %+v, want 1, none due yet", e)
 	}
 }
+
+// A scheduled notification keeps its time, is first due then, and isn't claimed before.
+func TestCreate_Scheduled(t *testing.T) {
+	clearQueue(t)
+	repo := NewNotifications(testDB)
+	at := time.Now().Add(time.Hour).Truncate(time.Microsecond) // PostgreSQL stores microseconds
+
+	created, err := repo.Create(t.Context(), domain.Notification{
+		Channel: domain.ChannelSMS, Recipient: "+905551234567", Content: "later", Priority: domain.PriorityNormal,
+		ScheduledAt: &at,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if created.ScheduledAt == nil || !created.ScheduledAt.Equal(at) {
+		t.Errorf("ScheduledAt = %v, want %v", created.ScheduledAt, at)
+	}
+	if !created.NextAttemptAt.Equal(at) {
+		t.Errorf("NextAttemptAt = %v, want the scheduled time %v", created.NextAttemptAt, at)
+	}
+
+	if _, ok, err := repo.ClaimNext(t.Context(), domain.ChannelSMS, domain.PriorityNormal, time.Minute); err != nil || ok {
+		t.Fatalf("ClaimNext before the scheduled time = %v, %v; want nothing to claim", ok, err)
+	}
+
+	// Once the time has come, it is claimed like any other notification.
+	if _, err := testDB.Exec(t.Context(),
+		`UPDATE notifications SET next_attempt_at = now() - interval '1 second' WHERE id = $1`, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	claimed, ok, err := repo.ClaimNext(t.Context(), domain.ChannelSMS, domain.PriorityNormal, time.Minute)
+	if err != nil || !ok || claimed.ID != created.ID {
+		t.Fatalf("ClaimNext once due = %v, %v, %v; want the scheduled notification", claimed.ID, ok, err)
+	}
+	if claimed.ScheduledAt == nil || !claimed.ScheduledAt.Equal(at) {
+		t.Errorf("claimed ScheduledAt = %v, want %v", claimed.ScheduledAt, at)
+	}
+}
+
+// In a batch, each item has its own schedule; unscheduled items are due at once.
+func TestCreateBatch_Scheduled(t *testing.T) {
+	at := time.Now().Add(time.Hour).Truncate(time.Microsecond)
+	ns := batchOf(2, uuid.New())
+	ns[1].ScheduledAt = &at
+
+	created, err := NewNotifications(testDB).CreateBatch(t.Context(), ns)
+	if err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+	if created[0].ScheduledAt != nil || created[0].NextAttemptAt.After(time.Now()) {
+		t.Errorf("item 0: ScheduledAt = %v, NextAttemptAt = %v; want unscheduled and due now",
+			created[0].ScheduledAt, created[0].NextAttemptAt)
+	}
+	if created[1].ScheduledAt == nil || !created[1].ScheduledAt.Equal(at) || !created[1].NextAttemptAt.Equal(at) {
+		t.Errorf("item 1: ScheduledAt = %v, NextAttemptAt = %v; want both %v",
+			created[1].ScheduledAt, created[1].NextAttemptAt, at)
+	}
+}

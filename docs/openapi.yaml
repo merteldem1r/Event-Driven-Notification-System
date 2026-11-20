@@ -759,6 +759,16 @@ components:
           allOf:
             - $ref: "#/components/schemas/Priority"
           default: normal
+        scheduled_at:
+          type: string
+          format: date-time
+          description: |
+            Optional. Send at this time instead of as soon as possible: RFC 3339 with a time zone,
+            e.g. `2026-11-21T09:00:00Z` or `2026-11-21T12:00:00+03:00`. Must be in the future and at
+            most 30 days ahead; a past time is rejected rather than sent at once, since it is usually
+            a time zone mistake. Until then the notification is `pending` and can be cancelled. It is
+            sent at that time or shortly after, within the rate limit.
+          example: "2026-11-21T09:00:00Z"
 
     CreateBatchRequest:
       type: object
@@ -884,6 +894,10 @@ components:
           type: integer
           minimum: 0
           description: How many times sending was tried.
+        scheduled_at:
+          type: string
+          format: date-time
+          description: When the client asked for it to be sent, in UTC. Present only for scheduled notifications.
         last_error:
           type: string
           description: Why the last attempt failed. Present only after a failure.

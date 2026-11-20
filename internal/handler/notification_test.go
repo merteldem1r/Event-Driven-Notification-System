@@ -226,6 +226,33 @@ func TestCreateNotification_Priority(t *testing.T) {
 	}
 }
 
+// scheduled_at reaches the service as the same instant, and comes back in UTC.
+func TestCreateNotification_Scheduled(t *testing.T) {
+	svc := &fakeNotificationService{}
+	rec := postNotification(t, svc,
+		`{"channel":"sms","recipient":"+905551234567","content":"hi","scheduled_at":"2026-11-21T12:00:00+03:00"}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body: %s", rec.Code, rec.Body)
+	}
+	want := time.Date(2026, 11, 21, 9, 0, 0, 0, time.UTC)
+	if svc.got.ScheduledAt == nil || !svc.got.ScheduledAt.Equal(want) {
+		t.Fatalf("service got scheduled_at %v, want %v", svc.got.ScheduledAt, want)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body is not JSON: %v", err)
+	}
+	if body["scheduled_at"] != "2026-11-21T09:00:00Z" {
+		t.Errorf("scheduled_at = %v, want 2026-11-21T09:00:00Z", body["scheduled_at"])
+	}
+
+	// Without it, the field is absent from the response.
+	rec = postNotification(t, &fakeNotificationService{}, `{"channel":"sms","recipient":"+905551234567","content":"hi"}`)
+	if strings.Contains(rec.Body.String(), "scheduled_at") {
+		t.Errorf("unscheduled response contains scheduled_at: %s", rec.Body)
+	}
+}
+
 func TestCreateNotification_ValidationError(t *testing.T) {
 	svc := &fakeNotificationService{err: &domain.ValidationError{Fields: []domain.FieldError{
 		{Field: "recipient", Message: "is required"},
@@ -299,6 +326,10 @@ func TestCreateNotification_Errors(t *testing.T) {
 		{"wrong type", `{"channel":5}`, nil, http.StatusBadRequest, codeInvalidBody, `field "channel" must be a string`},
 		{"unknown field", `{"recipent":"+905551234567"}`, nil, http.StatusBadRequest, codeInvalidBody, `unknown field "recipent"`},
 		{"two objects", `{}{}`, nil, http.StatusBadRequest, codeInvalidBody, "request body must contain a single JSON object"},
+		{"scheduled_at without a time zone", `{"scheduled_at":"2026-11-21T09:00:00"}`, nil,
+			http.StatusBadRequest, codeInvalidBody, `field "scheduled_at" must be an RFC 3339 time`},
+		{"scheduled_at as a number", `{"scheduled_at":1763715600}`, nil,
+			http.StatusBadRequest, codeInvalidBody, `field "scheduled_at" must be an RFC 3339 time`},
 		{"too large", `{"content":"` + strings.Repeat("a", maxBodyBytes) + `"}`, nil,
 			http.StatusRequestEntityTooLarge, codeBodyTooLarge, "request body must be at most 1048576 bytes"},
 		{"idempotency key reused", `{"channel":"sms"}`, domain.ErrIdempotencyKeyReused,

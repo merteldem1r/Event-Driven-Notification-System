@@ -8,6 +8,9 @@ import (
 	"time"
 )
 
+// testNow is the "current time" the validation tests run at.
+var testNow = time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+
 func TestValidate(t *testing.T) {
 	// Each case starts from a valid SMS and changes what it tests.
 	tests := []struct {
@@ -66,6 +69,18 @@ func TestValidate(t *testing.T) {
 		{"key with space", func(n *Notification) { n.IdempotencyKey = ptr("order 1042") }, []string{"Idempotency-Key"}},
 		{"key with non-ASCII", func(n *Notification) { n.IdempotencyKey = ptr("sipariş-1042") }, []string{"Idempotency-Key"}},
 
+		// Scheduled time (optional; nil means as soon as possible).
+		{"scheduled in an hour", func(n *Notification) { n.ScheduledAt = ptr(testNow.Add(time.Hour)) }, nil},
+		{"scheduled at the maximum", func(n *Notification) { n.ScheduledAt = ptr(testNow.Add(MaxScheduleAhead)) }, nil},
+		{"scheduled in another time zone", func(n *Notification) {
+			n.ScheduledAt = ptr(testNow.Add(time.Hour).In(time.FixedZone("+03:00", 3*60*60)))
+		}, nil},
+		{"scheduled now", func(n *Notification) { n.ScheduledAt = ptr(testNow) }, []string{"scheduled_at"}},
+		{"scheduled in the past", func(n *Notification) { n.ScheduledAt = ptr(testNow.Add(-time.Minute)) }, []string{"scheduled_at"}},
+		{"scheduled too far ahead", func(n *Notification) {
+			n.ScheduledAt = ptr(testNow.Add(MaxScheduleAhead + time.Second))
+		}, []string{"scheduled_at"}},
+
 		// All problems are reported together.
 		{"several errors at once", func(n *Notification) {
 			n.Recipient, n.Content, n.Priority = "", "", 0
@@ -77,7 +92,7 @@ func TestValidate(t *testing.T) {
 			n := Notification{Channel: ChannelSMS, Recipient: "+905551234567", Content: "hello", Priority: PriorityNormal}
 			tt.change(&n)
 
-			err := n.Validate()
+			err := n.Validate(testNow)
 			if tt.wantFields == nil {
 				if err != nil {
 					t.Fatalf("Validate() = %v, want nil", err)
@@ -149,6 +164,7 @@ func TestSameRequest(t *testing.T) {
 		{"different recipient", func(n *Notification) { n.Recipient = "+905559999999" }, false},
 		{"different content", func(n *Notification) { n.Content = "goodbye" }, false},
 		{"different priority", func(n *Notification) { n.Priority = PriorityHigh }, false},
+		{"scheduled vs not", func(n *Notification) { n.ScheduledAt = ptr(testNow) }, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -161,11 +177,49 @@ func TestSameRequest(t *testing.T) {
 	}
 }
 
+// The same scheduled time is the same request, even after PostgreSQL drops the nanoseconds.
+func TestSameRequest_ScheduledTimes(t *testing.T) {
+	at := testNow.Add(time.Hour + 1234*time.Nanosecond)
+	a := Notification{Channel: ChannelSMS, Recipient: "+905551234567", Content: "hi", Priority: PriorityNormal, ScheduledAt: &at}
+	b := a
+	b.ScheduledAt = ptr(at.Truncate(time.Microsecond).In(time.FixedZone("+03:00", 3*60*60)))
+	if !a.SameRequest(b) {
+		t.Error("same time at microsecond precision in another zone: SameRequest = false, want true")
+	}
+	b.ScheduledAt = ptr(at.Add(time.Second))
+	if a.SameRequest(b) {
+		t.Error("different scheduled time: SameRequest = true, want false")
+	}
+}
+
+func TestDueAt(t *testing.T) {
+	created := testNow
+	tests := []struct {
+		name      string
+		scheduled *time.Time
+		want      time.Time
+	}{
+		{"not scheduled: due when created", nil, created},
+		{"scheduled: due at the scheduled time", ptr(created.Add(time.Hour)), created.Add(time.Hour)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			n := Notification{CreatedAt: created, ScheduledAt: tt.scheduled}
+			if got := n.DueAt(); !got.Equal(tt.want) {
+				t.Errorf("DueAt = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestValidateBatch(t *testing.T) {
 	valid := Notification{Channel: ChannelSMS, Recipient: "+905551234567", Content: "hello", Priority: PriorityNormal}
 	noRecipient, noContent := valid, valid
 	noRecipient.Recipient = ""
 	noContent.Content = ""
+	scheduledOK, scheduledPast := valid, valid
+	scheduledOK.ScheduledAt = ptr(testNow.Add(time.Hour))
+	scheduledPast.ScheduledAt = ptr(testNow.Add(-time.Hour))
 
 	tests := []struct {
 		name       string
@@ -182,11 +236,13 @@ func TestValidateBatch(t *testing.T) {
 		{"valid key", []Notification{valid}, ptr("campaign-7"), nil},
 		{"invalid key is reported with the items", []Notification{noRecipient}, ptr("has space"),
 			[]string{"notifications[0].recipient", "Idempotency-Key"}},
+		{"each item checks its own schedule", []Notification{scheduledOK, scheduledPast}, nil,
+			[]string{"notifications[1].scheduled_at"}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateBatch(tt.batch, tt.key)
+			err := ValidateBatch(tt.batch, tt.key, testNow)
 			if tt.wantFields == nil {
 				if err != nil {
 					t.Fatalf("ValidateBatch = %v, want nil", err)

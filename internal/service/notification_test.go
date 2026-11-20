@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -456,5 +457,37 @@ func TestCancelBatch(t *testing.T) {
 	}
 	if _, err := svc.CancelBatch(t.Context(), uuid.New()); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("unknown batch err = %v, want domain.ErrNotFound", err)
+	}
+}
+
+// Scheduled times are checked against the service's clock, for single and batch creates.
+func TestCreate_ChecksScheduleAgainstTheClock(t *testing.T) {
+	now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	svc := NewNotifications(&fakeStore{})
+	svc.now = func() time.Time { return now }
+
+	n := validNotification()
+	for _, tt := range []struct {
+		name  string
+		at    time.Time
+		valid bool
+	}{
+		{"an hour after the clock", now.Add(time.Hour), true},
+		{"a minute before the clock", now.Add(-time.Minute), false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			n.ScheduledAt = &tt.at
+			_, _, err := svc.Create(t.Context(), n)
+			_, _, batchErr := svc.CreateBatch(t.Context(), []domain.Notification{n}, nil)
+			var ve *domain.ValidationError
+			for _, err := range []error{err, batchErr} {
+				if tt.valid && err != nil {
+					t.Errorf("err = %v, want nil", err)
+				}
+				if !tt.valid && !errors.As(err, &ve) {
+					t.Errorf("err = %v, want a *domain.ValidationError", err)
+				}
+			}
+		})
 	}
 }
