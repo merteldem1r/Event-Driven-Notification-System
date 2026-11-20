@@ -3,7 +3,8 @@
 # it runs the API by default, and Compose starts the worker with entrypoint /worker.
 
 # ---- Stage 1: build ----
-FROM golang:1.25-alpine AS build
+# Same Go version as go.mod (CI reads it from there); change both together.
+FROM golang:1.26-alpine AS build
 WORKDIR /src
 
 # Copy only the dependency files first and download modules. Docker caches
