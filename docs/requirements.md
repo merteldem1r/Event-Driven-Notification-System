@@ -64,7 +64,7 @@ Status values: **Done**, **Partial**, **Todo**.
 
 | ID | Feature | Status | Phase | Notes |
 |---|---|---|---|---|
-| OPT-1 | Failure handling | Partial | 6, 8 | Graceful worker shutdown done (finish in-flight work within a timeout); failed state + re-queue and circuit breaker in Phase 8 |
+| OPT-1 | Failure handling | Partial | 6, 8 | Graceful worker shutdown done (finish in-flight work within a timeout); retries with backoff and a maximum, then `failed` with the last error (8.2, 8.3); crashed workers' notifications recovered by lease expiry (8.4); re-queue endpoint optional (8.5); no circuit breaker (not needed with retries) |
 | OPT-2 | Scheduled notifications (future delivery) | Todo | 10 | |
 | OPT-3 | Template system with variable substitution | Todo | 11 | |
 | OPT-4 | WebSocket real-time status updates | Todo | 12 | Redis pub/sub between worker and API |

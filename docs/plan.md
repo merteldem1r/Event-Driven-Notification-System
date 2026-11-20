@@ -89,7 +89,14 @@ Goal: the schema exists and Go code can read/write it, tested against a real Pos
 - [x] 8.2 Temporary failures go back to `pending` with `next_attempt_at` moved ahead (`repository.Retry`); waits from `internal/retry` (D8: 10 s doubling to 10 min, equal jitter), provider's `Retry-After` (seconds or date) used when longer; `RETRY_BASE_DELAY`, `RETRY_MAX_DELAY`; API shows `next_attempt_at` while a retry waits. Until 8.3 there is no maximum: a temporary failure keeps retrying, at most every 10 min (RET-1, RET-2, RET-4)
 - [x] 8.3 Max attempts (D8: `RETRY_MAX_ATTEMPTS`, default 5): `retry.Policy.Next` says wait or stop; after the last attempt a temporary failure is `failed` with its last error, logged with `reason: no attempts left` (a rejection logs `rejected by the provider`) (RET-3)
 - [ ] 8.4 Lease expiry recovers stuck jobs (RET-5) **(next)**
-- [ ] 8.5 Re-queue endpoint for failed notifications; circuit breaker (OPT-1)
+- [ ] 8.5 *(optional, only if time is left at the end)* Re-queue endpoint for failed notifications (OPT-1)
+
+Dropped: a circuit breaker. Retries with backoff and a maximum (8.2, 8.3) already handle a provider
+outage well enough for this service; a breaker would add state and edge cases without a requirement
+asking for it.
+
+**Order after Phase 8:** Phase 9 (required metrics and worker health), then the README and Swagger UI
+(15.2, 15.3), then at most one optional feature (scheduled notifications is the cheapest).
 
 ## Phase 9 · Observability
 - [ ] 9.1 Prometheus metrics: queue depth, sent/failed counters, latency histograms (OBS-1)
