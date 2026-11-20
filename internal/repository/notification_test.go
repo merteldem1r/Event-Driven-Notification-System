@@ -828,3 +828,87 @@ func TestClaimNext_ConcurrentClaimsNeverOverlap(t *testing.T) {
 		}
 	}
 }
+
+// claimOne claims the only due notification after clearing the queue.
+func claimOne(t *testing.T) domain.Notification {
+	t.Helper()
+	clearQueue(t)
+	insertQueued(t, domain.PriorityNormal, time.Now().Add(-time.Second), domain.StatusPending)
+	n, ok, err := NewNotifications(testDB).ClaimNext(t.Context(), domain.PriorityNormal, time.Minute)
+	if err != nil || !ok {
+		t.Fatalf("claim: %v, %v", ok, err)
+	}
+	return n
+}
+
+// leaseOf reads locked_until, which isn't part of domain.Notification.
+func leaseOf(t *testing.T, id uuid.UUID) *time.Time {
+	t.Helper()
+	var lease *time.Time
+	if err := testDB.QueryRow(t.Context(), `SELECT locked_until FROM notifications WHERE id = $1`, id).Scan(&lease); err != nil {
+		t.Fatalf("read lease: %v", err)
+	}
+	return lease
+}
+
+func TestRecordResults(t *testing.T) {
+	repo := NewNotifications(testDB)
+
+	t.Run("sent", func(t *testing.T) {
+		n := claimOne(t)
+		if ok, err := repo.MarkSent(t.Context(), n.ID, n.Attempts, "msg-1"); err != nil || !ok {
+			t.Fatalf("MarkSent = %v, %v", ok, err)
+		}
+		got, _ := repo.GetByID(t.Context(), n.ID)
+		if got.Status != domain.StatusSent || got.ProviderMessageID == nil || *got.ProviderMessageID != "msg-1" ||
+			got.LastError != nil || leaseOf(t, n.ID) != nil {
+			t.Errorf("after MarkSent: %+v; want sent, msg-1, no error, no lease", got)
+		}
+	})
+
+	t.Run("failed", func(t *testing.T) {
+		n := claimOne(t)
+		if ok, err := repo.MarkFailed(t.Context(), n.ID, n.Attempts, "provider: status 503"); err != nil || !ok {
+			t.Fatalf("MarkFailed = %v, %v", ok, err)
+		}
+		got, _ := repo.GetByID(t.Context(), n.ID)
+		if got.Status != domain.StatusFailed || got.LastError == nil || *got.LastError != "provider: status 503" ||
+			leaseOf(t, n.ID) != nil {
+			t.Errorf("after MarkFailed: %+v; want failed with the error, no lease", got)
+		}
+	})
+
+	t.Run("released", func(t *testing.T) {
+		n := claimOne(t)
+		if ok, err := repo.Release(t.Context(), n.ID, n.Attempts); err != nil || !ok {
+			t.Fatalf("Release = %v, %v", ok, err)
+		}
+		// It is due again: the next claim gets it.
+		again, ok, err := repo.ClaimNext(t.Context(), domain.PriorityNormal, time.Minute)
+		if err != nil || !ok || again.ID != n.ID || again.Attempts != 2 {
+			t.Errorf("claim after release = %s (attempt %d), %v, %v; want the same notification, attempt 2",
+				again.ID, again.Attempts, ok, err)
+		}
+	})
+
+	// A claim that was superseded can't overwrite the newer claim's result.
+	t.Run("stale attempt changes nothing", func(t *testing.T) {
+		n := claimOne(t)
+		if ok, err := repo.MarkSent(t.Context(), n.ID, n.Attempts+1, "msg-x"); err != nil || ok {
+			t.Errorf("MarkSent with another attempt = %v, %v; want not recorded", ok, err)
+		}
+		if got, _ := repo.GetByID(t.Context(), n.ID); got.Status != domain.StatusProcessing {
+			t.Errorf("status = %s, want still processing", got.Status)
+		}
+	})
+
+	t.Run("not processing changes nothing", func(t *testing.T) {
+		n := claimOne(t)
+		if _, err := repo.MarkSent(t.Context(), n.ID, n.Attempts, "msg-1"); err != nil {
+			t.Fatal(err)
+		}
+		if ok, err := repo.MarkFailed(t.Context(), n.ID, n.Attempts, "late"); err != nil || ok {
+			t.Errorf("MarkFailed on a sent notification = %v, %v; want not recorded", ok, err)
+		}
+	})
+}

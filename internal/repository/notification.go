@@ -187,6 +187,37 @@ func (r *Notifications) ClaimNext(ctx context.Context, p domain.Priority, lease 
 	return n, true, nil
 }
 
+// The result of a send is recorded only by the claim that made it: attempt is the claim's
+// attempt number, and if the notification was claimed again since (an expired lease, Phase 8)
+// nothing changes and ok is false.
+
+// MarkSent records a successful send with the provider's message ID.
+func (r *Notifications) MarkSent(ctx context.Context, id uuid.UUID, attempt int, providerMessageID string) (ok bool, _ error) {
+	return r.finish(ctx, id, attempt, `status = 'sent', provider_message_id = $3, last_error = NULL`, providerMessageID)
+}
+
+// MarkFailed records a failed send with the error.
+func (r *Notifications) MarkFailed(ctx context.Context, id uuid.UUID, attempt int, lastError string) (ok bool, _ error) {
+	return r.finish(ctx, id, attempt, `status = 'failed', last_error = $3`, lastError)
+}
+
+// Release puts a notification back in the queue, e.g. when a send was interrupted by shutdown.
+func (r *Notifications) Release(ctx context.Context, id uuid.UUID, attempt int) (ok bool, _ error) {
+	return r.finish(ctx, id, attempt, `status = 'pending'`)
+}
+
+// finish applies set (with its extra parameters from $3) to the claimed notification and ends its lease.
+func (r *Notifications) finish(ctx context.Context, id uuid.UUID, attempt int, set string, args ...any) (bool, error) {
+	tag, err := r.db.Exec(ctx, `
+		UPDATE notifications SET `+set+`, locked_until = NULL, updated_at = now()
+		WHERE id = $1 AND status = 'processing' AND attempts = $2`,
+		append([]any{id, attempt}, args...)...)
+	if err != nil {
+		return false, fmt.Errorf("record result of %s: %w", id, err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
 // CancelPending cancels the notification only if it is still pending, in one statement,
 // so a worker claiming it at the same moment can't also win (IMP-4). ok is false when no
 // pending notification with this ID exists; the caller decides what that means.

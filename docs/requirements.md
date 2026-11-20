@@ -26,7 +26,7 @@ Status values: **Done**, **Partial**, **Todo**.
 
 | ID | Requirement | Status | Phase | Notes |
 |---|---|---|---|---|
-| PROC-1 | Process notifications asynchronously via queue workers | Partial | 6 | Worker loops claim with `FOR UPDATE SKIP LOCKED` (done); sending in 6.3, 6.4 |
+| PROC-1 | Process notifications asynchronously via queue workers | Done | 6 | Worker loops claim with `FOR UPDATE SKIP LOCKED`, send, record the result |
 | PROC-2 | Rate limiting: max 100 messages/second **per channel** | Todo | 7 | Shared across all workers (Redis) |
 | PROC-3 | Priority queue support (high, normal, low) | Done | 6 | Weighted 6:3:1 with fallback (D7) |
 | PROC-4 | Content validation (character limits, required fields) | Done | 4 | D4: SMS 1,600, push 500, email 100,000 characters; recipient format per channel; all field errors returned as `400 validation_failed` |
@@ -41,14 +41,14 @@ Status values: **Done**, **Partial**, **Todo**.
 | RET-3 | Max attempts, then mark `failed` and keep the last error | Todo | 8 | |
 | RET-4 | Respect `Retry-After` from the provider | Todo | 8 | |
 | RET-5 | Recover jobs held by crashed workers (lease expiry) | Todo | 8 | |
-| RET-6 | Store the provider's `messageId` on success | Todo | 6 | |
+| RET-6 | Store the provider's `messageId` on success | Done | 6 | `provider_message_id`, set with status `sent` |
 
 ## 4. Observability
 
 | ID | Requirement | Status | Phase | Notes |
 |---|---|---|---|---|
 | OBS-1 | Real-time metrics endpoint: queue depth, success/failure rates, latency | Todo | 9 | Prometheus `/metrics` |
-| OBS-2 | Structured logging | Partial | 2, 9 | JSON logs via `slog` in the API and the worker (done); one log line per HTTP request (done); per-notification worker logs from 6.4 |
+| OBS-2 | Structured logging | Partial | 2, 9 | JSON logs via `slog` in the API and the worker (done); one log line per HTTP request (done); worker logs one line per send result (IDs, channel, attempt, duration; never content or recipient) |
 | OBS-3 | Correlation IDs in logs, carried from API to worker | Partial | 4, 9 | API side done (D13): `X-Correlation-ID`, on every API log line, stored on the notification; the worker puts it on its log lines for that notification (6.2) |
 | OBS-4 | Health check endpoint | Partial | 2, 3 | `GET /health` checks PostgreSQL, 200/503 (done); Redis check in Phase 7 |
 
@@ -56,9 +56,9 @@ Status values: **Done**, **Partial**, **Todo**.
 
 | ID | Requirement | Status | Phase | Notes |
 |---|---|---|---|---|
-| PRV-1 | Send `POST {to, channel, content}` to the provider (webhook.site) | Partial | 6 | Client done (`internal/provider`); the worker uses it from 6.4 |
-| PRV-2 | Handle the expected `202 {messageId, status, timestamp}` response | Partial | 6 | Parsed by the client; a 2xx without `messageId` is an error; stored from 6.4 |
-| PRV-3 | Provider behind an interface; URL from config; local mock available | Partial | 6 | `PROVIDER_URL` from config (done); interface in 6.4; local fake provider optional later (D9) |
+| PRV-1 | Send `POST {to, channel, content}` to the provider (webhook.site) | Done | 6 | `internal/provider`; verified against webhook.site |
+| PRV-2 | Handle the expected `202 {messageId, status, timestamp}` response | Done | 6 | A 2xx without `messageId` is a failure; the `messageId` is stored |
+| PRV-3 | Provider behind an interface; URL from config; local mock available | Partial | 6 | `Sender` interface and `PROVIDER_URL` done; local fake provider optional later (D9) |
 
 ## 6. Optional Features
 

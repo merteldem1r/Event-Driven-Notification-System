@@ -9,7 +9,7 @@ is tested. Then we stop, explain it, and the user commits it.
 
 Status: `[x]` done, `[ ]` not done. The next step is marked **(next)**.
 
-> **Current position:** Phase 6, step **6.4** (send claimed notifications and record the result).
+> **Current position:** Phase 6, step **6.5** (worker in docker-compose).
 
 ---
 
@@ -67,8 +67,8 @@ Goal: the schema exists and Go code can read/write it, tested against a real Pos
 - [x] 6.1 `cmd/worker` + `internal/worker`: N loops (`WORKER_CONCURRENCY`), idle polling (`WORKER_POLL_INTERVAL`), graceful shutdown on SIGINT/SIGTERM: stop taking work, let in-flight work finish within `WORKER_SHUTDOWN_TIMEOUT`, then cancel it; `make run-worker`
 - [x] 6.2 Claim with `FOR UPDATE SKIP LOCKED` (row becomes `processing`, attempts + 1, leased for `WORKER_LEASE_DURATION`); weighted priority 6:3:1 with fallback (D7); claim logs carry the API correlation ID (PROC-1, PROC-3, IMP-2, IMP-6)
 - [x] 6.3 Provider HTTP client (`internal/provider`): `POST {to, channel, content}`, reads `202 {messageId, status, timestamp}`, notification ID as `Idempotency-Key`, `PROVIDER_TIMEOUT`; `PROVIDER_URL` = your webhook.site URL (D9: webhook.site only for now) (PRV-1, PRV-2)
-- [ ] 6.4 Send + record result (`sent`, provider `messageId`) (RET-6) **(next)**
-- [ ] 6.5 Worker service in docker-compose
+- [x] 6.4 Send each claimed notification and record the result: `sent` + provider `messageId`, `failed` + `last_error` (retries come in Phase 8), or back to `pending` if shutdown cut the send off; recorded even during shutdown; only the claim's own attempt can record (fencing); worker requires `PROVIDER_URL` (RET-6, PRV-1, PRV-2)
+- [ ] 6.5 Worker service in docker-compose **(next)**
 
 **Verify:** create a notification → a worker sends it → status becomes `sent`; request visible in webhook.site or mock.
 

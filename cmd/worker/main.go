@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -12,6 +13,7 @@ import (
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/config"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/database"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/logging"
+	"github.com/merteldem1r/Event-Driven-Notification-System/internal/provider"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/repository"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/service"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/worker"
@@ -35,6 +37,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	if cfg.ProviderURL == "" { // optional for the API, which never sends
+		return errors.New("PROVIDER_URL is required for the worker: set it to your webhook.site URL")
+	}
 
 	logger := slog.New(logging.NewHandler(
 		slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}),
@@ -55,8 +60,12 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Wire the layers: repository (the queue) -> dispatcher -> worker loops.
-	dispatcher := service.NewDispatcher(repository.NewNotifications(db), cfg.WorkerLeaseDuration, logger)
+	// Wire the layers: repository (the queue) + provider client -> dispatcher -> worker loops.
+	dispatcher := service.NewDispatcher(
+		repository.NewNotifications(db),
+		provider.NewClient(cfg.ProviderURL, cfg.ProviderTimeout),
+		cfg.WorkerLeaseDuration, logger,
+	)
 	w := worker.New(dispatcher, worker.Config{
 		Concurrency:     cfg.WorkerConcurrency,
 		PollInterval:    cfg.WorkerPollInterval,

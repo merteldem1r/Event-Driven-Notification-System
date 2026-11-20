@@ -7,14 +7,29 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/domain"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/logging"
+	"github.com/merteldem1r/Event-Driven-Notification-System/internal/provider"
 )
 
-// Queue hands out due notifications, one priority at a time.
+// Queue hands out due notifications, one priority at a time, and records what happened to them.
+// The record methods take the claim's attempt number and report ok=false if it was claimed again since.
 type Queue interface {
 	ClaimNext(ctx context.Context, p domain.Priority, lease time.Duration) (_ domain.Notification, ok bool, _ error)
+	MarkSent(ctx context.Context, id uuid.UUID, attempt int, providerMessageID string) (ok bool, _ error)
+	MarkFailed(ctx context.Context, id uuid.UUID, attempt int, lastError string) (ok bool, _ error)
+	Release(ctx context.Context, id uuid.UUID, attempt int) (ok bool, _ error)
 }
+
+// Sender delivers one message to the external provider.
+type Sender interface {
+	Send(ctx context.Context, m provider.Message) (provider.Receipt, error)
+}
+
+// recordTimeout bounds saving a send's result, which must happen even during shutdown.
+const recordTimeout = 5 * time.Second
 
 // claimPattern is D7, weighted priority: of every 10 claims, 6 prefer high, 3 normal and
 // 1 low. Interleaved, so no priority waits through a long run of the others.
@@ -26,14 +41,16 @@ var claimPattern = [10]domain.Priority{
 // Dispatcher delivers queued notifications, one per ProcessNext call; the worker calls it.
 type Dispatcher struct {
 	queue  Queue
+	sender Sender
 	lease  time.Duration
 	logger *slog.Logger
 	turn   atomic.Uint64 // position in claimPattern, shared by all worker loops
 }
 
-// NewDispatcher returns a Dispatcher that leases each claimed notification for lease.
-func NewDispatcher(queue Queue, lease time.Duration, logger *slog.Logger) *Dispatcher {
-	return &Dispatcher{queue: queue, lease: lease, logger: logger}
+// NewDispatcher returns a Dispatcher that leases each claimed notification for lease
+// and sends it through sender.
+func NewDispatcher(queue Queue, sender Sender, lease time.Duration, logger *slog.Logger) *Dispatcher {
+	return &Dispatcher{queue: queue, sender: sender, lease: lease, logger: logger}
 }
 
 // ProcessNext takes the next notification and delivers it; found is false if nothing is due.
@@ -44,8 +61,7 @@ func (d *Dispatcher) ProcessNext(ctx context.Context) (found bool, err error) {
 			return false, fmt.Errorf("claim: %w", err)
 		}
 		if ok {
-			d.deliver(ctx, n)
-			return true, nil
+			return true, d.deliver(ctx, n)
 		}
 	}
 	return false, nil
@@ -64,12 +80,51 @@ func (d *Dispatcher) claimOrder() []domain.Priority {
 	return order
 }
 
-// deliver handles a claimed notification. Sending it and recording the result are added in
-// steps 6.3 and 6.4; until then it stays processing.
-func (d *Dispatcher) deliver(ctx context.Context, n domain.Notification) {
+// deliver sends a claimed notification and records the result: sent, failed, or back to
+// pending if the send was cut off by shutdown. Only a failure to record is returned.
+func (d *Dispatcher) deliver(ctx context.Context, n domain.Notification) error {
 	if n.CorrelationID != nil { // the API's ID, so one search finds the request and its delivery
 		ctx = logging.WithCorrelationID(ctx, *n.CorrelationID)
 	}
-	d.logger.InfoContext(ctx, "notification claimed",
-		"notification_id", n.ID, "channel", n.Channel, "priority", n.Priority.String(), "attempt", n.Attempts)
+	// IDs only: never the recipient or the content.
+	log := d.logger.With("notification_id", n.ID, "channel", n.Channel, "priority", n.Priority.String(), "attempt", n.Attempts)
+
+	start := time.Now()
+	receipt, sendErr := d.sender.Send(ctx, toMessage(n))
+	took := time.Since(start).Milliseconds()
+
+	// Record even if shutdown cancels ctx now: a send that isn't recorded as sent would be sent again.
+	rec, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
+	defer cancel()
+
+	var recorded bool
+	var err error
+	switch {
+	case sendErr == nil:
+		recorded, err = d.queue.MarkSent(rec, n.ID, n.Attempts, receipt.MessageID)
+		log.InfoContext(ctx, "notification sent", "provider_message_id", receipt.MessageID, "duration_ms", took)
+	case ctx.Err() != nil: // we gave up at the shutdown deadline; the provider didn't fail
+		recorded, err = d.queue.Release(rec, n.ID, n.Attempts)
+		log.WarnContext(ctx, "send cut off by shutdown, notification back in the queue", "duration_ms", took)
+	default:
+		// Final for now; Phase 8 retries with backoff instead.
+		recorded, err = d.queue.MarkFailed(rec, n.ID, n.Attempts, sendErr.Error())
+		log.WarnContext(ctx, "notification failed", "error", sendErr, "duration_ms", took)
+	}
+	if err != nil {
+		return fmt.Errorf("record result: %w", err)
+	}
+	if !recorded {
+		log.WarnContext(ctx, "result not recorded: the notification was claimed again meanwhile")
+	}
+	return nil
+}
+
+// toMessage maps a notification to what the provider receives.
+func toMessage(n domain.Notification) provider.Message {
+	m := provider.Message{ID: n.ID, To: n.Recipient, Channel: string(n.Channel), Content: n.Content}
+	if n.CorrelationID != nil {
+		m.CorrelationID = *n.CorrelationID
+	}
+	return m
 }
