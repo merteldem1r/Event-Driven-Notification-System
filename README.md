@@ -3,6 +3,10 @@
 A service that sends **SMS, email and push notifications** on behalf of other systems, written
 in Go.
 
+![The notification service dashboard: client systems, the API, PostgreSQL as the queue, three workers, the Redis rate limiter and the provider, with notifications moving between them](docs/assets/notification-service-dashboard.png)
+
+<sub>A browser simulation of the service (in <a href="web/"><code>web/</code></a>): every block is a part of the service, and the dots are notifications moving between them.</sub>
+
 ## The idea
 
 Other systems (a shop, a bank, an app) need to notify their users: "your order has shipped",
@@ -14,6 +18,10 @@ This service sits in between. It accepts every request at once, keeps the messag
 and sends them out at a steady, safe rate.
 
 > **Bursts come in, a steady stream goes out, and the queue absorbs the difference.**
+
+![Left: the workers send a steady 85 messages per second per channel, below the provider limit of 100. Right: the queue jumps after a burst and then drains at the send rate](docs/assets/notification-service-dashboard-2.png)
+
+<sub>The same simulation after a burst. Left: what reaches the provider stays flat, below its limit. Right: the queue takes the burst and drains at the send rate. Below: the log lines the API and workers print.</sub>
 
 ## The building blocks
 
