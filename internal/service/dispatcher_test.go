@@ -81,8 +81,19 @@ func (q *fakeQueue) ClaimNext(_ context.Context, ch domain.Channel, p domain.Pri
 	return domain.Notification{ID: uuid.New(), Channel: ch, Priority: p, Status: domain.StatusProcessing, Attempts: 1}, true, nil
 }
 
+// fakeLimiter answers every Wait with err and records the channels asked for.
+type fakeLimiter struct {
+	err      error
+	channels []domain.Channel
+}
+
+func (l *fakeLimiter) Wait(_ context.Context, ch domain.Channel) error {
+	l.channels = append(l.channels, ch)
+	return l.err
+}
+
 func newTestDispatcher(q *fakeQueue) *Dispatcher {
-	return NewDispatcher(domain.ChannelSMS, q, &fakeSender{}, time.Minute, slog.New(slog.DiscardHandler))
+	return NewDispatcher(domain.ChannelSMS, q, &fakeSender{}, &fakeLimiter{}, time.Minute, slog.New(slog.DiscardHandler))
 }
 
 // count tallies claims per priority.
@@ -147,7 +158,7 @@ func TestProcessNext_FallsBackWhenPreferredIsEmpty(t *testing.T) {
 // A dispatcher only ever claims its own channel (D16).
 func TestProcessNext_ClaimsOnlyItsChannel(t *testing.T) {
 	q := &fakeQueue{due: map[domain.Priority]int{domain.PriorityLow: 1}}
-	d := NewDispatcher(domain.ChannelEmail, q, &fakeSender{}, time.Minute, slog.New(slog.DiscardHandler))
+	d := NewDispatcher(domain.ChannelEmail, q, &fakeSender{}, &fakeLimiter{}, time.Minute, slog.New(slog.DiscardHandler))
 
 	for range 2 { // one claim, then an empty queue
 		if _, err := d.ProcessNext(t.Context()); err != nil {
@@ -161,6 +172,23 @@ func TestProcessNext_ClaimsOnlyItsChannel(t *testing.T) {
 	}
 	if len(q.channels) == 0 {
 		t.Fatal("no claims made")
+	}
+}
+
+// Wait asks the limiter for a slot of the dispatcher's own channel and passes its answer on.
+func TestWait_AsksTheLimiterForItsChannel(t *testing.T) {
+	l := &fakeLimiter{}
+	d := NewDispatcher(domain.ChannelPush, &fakeQueue{}, &fakeSender{}, l, time.Minute, slog.New(slog.DiscardHandler))
+	if err := d.Wait(t.Context()); err != nil {
+		t.Fatalf("Wait = %v, want nil", err)
+	}
+	if len(l.channels) != 1 || l.channels[0] != domain.ChannelPush {
+		t.Errorf("limiter asked for %v, want [push]", l.channels)
+	}
+
+	l.err = errors.New("redis down")
+	if err := d.Wait(t.Context()); !errors.Is(err, l.err) {
+		t.Errorf("Wait = %v, want the limiter's error", err)
 	}
 }
 
@@ -194,7 +222,7 @@ func oneDue() *fakeQueue {
 
 func TestDeliver_Sent(t *testing.T) {
 	q, s := oneDue(), &fakeSender{}
-	found, err := NewDispatcher(domain.ChannelSMS, q, s, time.Minute, slog.New(slog.DiscardHandler)).ProcessNext(t.Context())
+	found, err := NewDispatcher(domain.ChannelSMS, q, s, &fakeLimiter{}, time.Minute, slog.New(slog.DiscardHandler)).ProcessNext(t.Context())
 	if !found || err != nil {
 		t.Fatalf("ProcessNext = %v, %v", found, err)
 	}
@@ -221,7 +249,7 @@ func TestDeliver_MapsTheNotification(t *testing.T) {
 func TestDeliver_Failed(t *testing.T) {
 	q := oneDue()
 	s := &fakeSender{err: &provider.Error{StatusCode: 503, Err: errors.New("Service Unavailable")}}
-	if _, err := NewDispatcher(domain.ChannelSMS, q, s, time.Minute, slog.New(slog.DiscardHandler)).ProcessNext(t.Context()); err != nil {
+	if _, err := NewDispatcher(domain.ChannelSMS, q, s, &fakeLimiter{}, time.Minute, slog.New(slog.DiscardHandler)).ProcessNext(t.Context()); err != nil {
 		t.Fatalf("ProcessNext: %v (a provider failure is recorded, not returned)", err)
 	}
 	if len(q.results) != 1 || q.results[0] != "failed:provider: status 503: Service Unavailable" {
@@ -235,7 +263,7 @@ func TestDeliver_CutOffByShutdown(t *testing.T) {
 	q := oneDue()
 	s := &fakeSender{before: cancel, err: context.Canceled}
 
-	if _, err := NewDispatcher(domain.ChannelSMS, q, s, time.Minute, slog.New(slog.DiscardHandler)).ProcessNext(ctx); err != nil {
+	if _, err := NewDispatcher(domain.ChannelSMS, q, s, &fakeLimiter{}, time.Minute, slog.New(slog.DiscardHandler)).ProcessNext(ctx); err != nil {
 		t.Fatalf("ProcessNext: %v", err)
 	}
 	if len(q.results) != 1 || q.results[0] != "released" {
@@ -252,7 +280,7 @@ func TestDeliver_RecordsSentDuringShutdown(t *testing.T) {
 	q := oneDue()
 	s := &fakeSender{before: cancel} // cancelled, but the provider still answered 202
 
-	if _, err := NewDispatcher(domain.ChannelSMS, q, s, time.Minute, slog.New(slog.DiscardHandler)).ProcessNext(ctx); err != nil {
+	if _, err := NewDispatcher(domain.ChannelSMS, q, s, &fakeLimiter{}, time.Minute, slog.New(slog.DiscardHandler)).ProcessNext(ctx); err != nil {
 		t.Fatalf("ProcessNext: %v", err)
 	}
 	if len(q.results) != 1 || q.results[0] != "sent:msg-1" || q.recordCtx != nil {

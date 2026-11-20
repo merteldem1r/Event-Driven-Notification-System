@@ -23,6 +23,11 @@ type Queue interface {
 	Release(ctx context.Context, id uuid.UUID, attempt int) (ok bool, _ error)
 }
 
+// Limiter hands out rate-limit slots per channel, shared by all workers (D15).
+type Limiter interface {
+	Wait(ctx context.Context, ch domain.Channel) error
+}
+
 // Sender delivers one message to the external provider.
 type Sender interface {
 	Send(ctx context.Context, m provider.Message) (provider.Receipt, error)
@@ -45,19 +50,26 @@ type Dispatcher struct {
 	channel domain.Channel
 	queue   Queue
 	sender  Sender
+	limiter Limiter
 	lease   time.Duration
 	logger  *slog.Logger
 	turn    atomic.Uint64 // position in claimPattern, shared by this channel's worker loops
 }
 
-// NewDispatcher returns a Dispatcher for channel ch that leases each claimed notification for
-// lease and sends it through sender.
-func NewDispatcher(ch domain.Channel, queue Queue, sender Sender, lease time.Duration, logger *slog.Logger) *Dispatcher {
-	return &Dispatcher{channel: ch, queue: queue, sender: sender, lease: lease, logger: logger}
+// NewDispatcher returns a Dispatcher for channel ch that waits for limiter before each claim,
+// leases each claimed notification for lease and sends it through sender.
+func NewDispatcher(ch domain.Channel, queue Queue, sender Sender, limiter Limiter, lease time.Duration, logger *slog.Logger) *Dispatcher {
+	return &Dispatcher{channel: ch, queue: queue, sender: sender, limiter: limiter, lease: lease, logger: logger}
+}
+
+// Wait blocks until the channel's rate limit allows one more send. It comes before the claim
+// (D16), so nothing is held while waiting and a Redis outage claims nothing.
+func (d *Dispatcher) Wait(ctx context.Context) error {
+	return d.limiter.Wait(ctx, d.channel)
 }
 
 // ProcessNext takes the next notification of the channel and delivers it; found is false if
-// nothing is due.
+// nothing is due. Each call uses the slot of one Wait.
 func (d *Dispatcher) ProcessNext(ctx context.Context) (found bool, err error) {
 	for _, p := range d.claimOrder() {
 		n, ok, err := d.queue.ClaimNext(ctx, d.channel, p, d.lease)

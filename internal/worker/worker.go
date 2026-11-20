@@ -15,6 +15,9 @@ var ErrShutdownTimeout = errors.New("shutdown timeout: in-flight work was cancel
 
 // Processor handles one queued notification per call.
 type Processor interface {
+	// Wait blocks until the next notification may be taken, e.g. until a rate-limit slot is
+	// free. It returns an error if ctx ends first or permission can't be checked.
+	Wait(ctx context.Context) error
 	// ProcessNext takes the next notification from the queue and handles it.
 	// found is false when the queue had nothing to take.
 	ProcessNext(ctx context.Context) (found bool, err error)
@@ -84,6 +87,17 @@ func (w *Worker) Run(ctx context.Context) error {
 // stop decides whether to take more work; work is passed to the processor.
 func (w *Worker) loop(stop, work context.Context, proc Processor, id int) {
 	for stop.Err() == nil {
+		// Nothing is taken while waiting, so the stop signal ends the wait right away.
+		err := proc.Wait(stop)
+		if stop.Err() != nil {
+			return // stopped while waiting: take nothing new
+		}
+		if err != nil { // e.g. Redis down: take nothing (fail closed) and try again later
+			w.logger.ErrorContext(work, "waiting to process failed", "loop", id, "error", err)
+			w.pause(stop)
+			continue
+		}
+
 		found, err := proc.ProcessNext(work)
 		if err != nil {
 			w.logger.ErrorContext(work, "processing failed", "loop", id, "error", err)
@@ -91,13 +105,17 @@ func (w *Worker) loop(stop, work context.Context, proc Processor, id int) {
 		if found && err == nil {
 			continue // more may be waiting: don't sleep while the queue is busy
 		}
+		// Empty queue or an error (e.g. database down): wait, so we don't spin.
+		w.pause(stop)
+	}
+}
 
-		// Empty queue or an error (e.g. database down): wait, so we don't spin, but wake on stop.
-		timer := time.NewTimer(w.cfg.PollInterval)
-		select {
-		case <-stop.Done():
-		case <-timer.C:
-		}
-		timer.Stop()
+// pause sleeps one poll interval, or less if stop is cancelled.
+func (w *Worker) pause(stop context.Context) {
+	timer := time.NewTimer(w.cfg.PollInterval)
+	defer timer.Stop()
+	select {
+	case <-stop.Done():
+	case <-timer.C:
 	}
 }

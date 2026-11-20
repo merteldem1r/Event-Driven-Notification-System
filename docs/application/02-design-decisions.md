@@ -356,6 +356,17 @@ before: 100/s x 0.1 s provider latency = 10). Each channel has its own dispatche
 6:3:1 pattern. The API's `/health` does not check Redis, since the API doesn't use it; the
 worker's own health and metrics endpoint (Phase 9) does.
 
+The wait for a slot ends at the stop signal, unlike a send: a loop that is only waiting holds
+nothing, so on shutdown it takes no new notification. Measured with two worker processes at
+20/s per channel (burst 5) on 100 SMS and 100 emails: exactly 20 SMS and 20 emails per second,
+split 112 / 88 between the processes. With Redis stopped, nothing was claimed (the notification
+stayed `pending`) and it was sent as soon as Redis was back, without a restart.
+
+Side effect of a slot before the claim: idle loops take a slot every poll interval and find
+nothing. When the idle loops of all processes take slots faster than the rate (here 20 loops x
+2 per second = 40 > 20), the burst is used up while idle, so the first second after a quiet
+time sends the rate, not rate + burst. The limit and the throughput under load are unaffected.
+
 ---
 
 ## Resulting architecture

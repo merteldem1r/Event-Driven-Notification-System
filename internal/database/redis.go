@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -21,4 +22,15 @@ func ConnectRedis(ctx context.Context, url string) (*redis.Client, error) {
 		return nil, fmt.Errorf("ping redis: %w", err)
 	}
 	return client, nil
+}
+
+// RedisLogger passes the Redis library's own messages to slog, so they are JSON like every
+// other log line. Install it with redis.SetLogger.
+type RedisLogger struct {
+	Logger *slog.Logger
+}
+
+// Printf logs one library message as a warning: they report trouble such as failed connections.
+func (l RedisLogger) Printf(ctx context.Context, format string, v ...any) {
+	l.Logger.WarnContext(ctx, fmt.Sprintf(format, v...), "component", "redis")
 }

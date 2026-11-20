@@ -36,6 +36,7 @@ services:
     environment:
       LOG_LEVEL: info
       DATABASE_URL: postgres://notification:notification@postgres:5432/notification?sslmode=disable
+      REDIS_URL: redis://redis:6379/0 # shared rate limit, 100/s per channel by default (D15)
       # Empty if unset: the worker then stops with a clear message, everything else still runs.
       PROVIDER_URL: ${PROVIDER_URL:-}
     # docker stop sends SIGTERM and kills after this long. Longer than WORKER_SHUTDOWN_TIMEOUT (25s),
@@ -43,6 +44,8 @@ services:
     stop_grace_period: 30s
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
