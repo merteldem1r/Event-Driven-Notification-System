@@ -9,7 +9,7 @@ is tested. Then we stop, explain it, and the user commits it.
 
 Status: `[x]` done, `[ ]` not done. The next step is marked **(next)**.
 
-> **Current position:** Phase 8, step **8.2** (backoff with jitter, `Retry-After`; decide D8).
+> **Current position:** Phase 8, step **8.3** (max attempts, then `failed`).
 
 ---
 
@@ -86,8 +86,8 @@ Goal: the schema exists and Go code can read/write it, tested against a real Pos
 
 ## Phase 8 · Retries and failure handling
 - [x] 8.1 Classify provider errors (D18): `provider.IsTemporary` says temporary for no response, `408`, `429`, `5xx` and a `2xx` without a `messageId`, permanent for `3xx`, other `4xx` and errors before sending; the worker logs `temporary` with each failure (still final until 8.2) (RET-1)
-- [ ] 8.2 Backoff + jitter via `next_attempt_at`; respect `Retry-After` (decide D8) (RET-2, RET-4) **(next)**
-- [ ] 8.3 Max attempts → `failed` with last error (RET-3)
+- [x] 8.2 Temporary failures go back to `pending` with `next_attempt_at` moved ahead (`repository.Retry`); waits from `internal/retry` (D8: 10 s doubling to 10 min, equal jitter), provider's `Retry-After` (seconds or date) used when longer; `RETRY_BASE_DELAY`, `RETRY_MAX_DELAY`; API shows `next_attempt_at` while a retry waits. Until 8.3 there is no maximum: a temporary failure keeps retrying, at most every 10 min (RET-1, RET-2, RET-4)
+- [ ] 8.3 Max attempts → `failed` with last error (RET-3) **(next)**
 - [ ] 8.4 Lease expiry recovers stuck jobs (RET-5)
 - [ ] 8.5 Re-queue endpoint for failed notifications; circuit breaker (OPT-1)
 

@@ -25,7 +25,7 @@ type fakeQueue struct {
 	channels  []domain.Channel  // the channel of every ClaimNext call
 	claimed   []domain.Priority // the successful ones
 	lease     time.Duration
-	results   []string // "sent:<messageId>", "failed:<error>", "released" or "unclaimed"
+	results   []string // "sent:<messageId>", "failed:<error>", "retry:<error> in <delay>", "released" or "unclaimed"
 	recordCtx error    // ctx.Err() of the last record call
 }
 
@@ -48,6 +48,10 @@ func (q *fakeQueue) MarkFailed(ctx context.Context, _ uuid.UUID, _ int, lastErro
 
 func (q *fakeQueue) Release(ctx context.Context, _ uuid.UUID, _ int) (bool, error) {
 	return q.record(ctx, "released")
+}
+
+func (q *fakeQueue) Retry(ctx context.Context, _ uuid.UUID, _ int, lastError string, delay time.Duration) (bool, error) {
+	return q.record(ctx, "retry:"+lastError+" in "+delay.String())
 }
 
 func (q *fakeQueue) Unclaim(ctx context.Context, _ uuid.UUID, _ int) (bool, error) {
@@ -87,6 +91,14 @@ func (q *fakeQueue) ClaimNext(_ context.Context, ch domain.Channel, p domain.Pri
 	return domain.Notification{ID: uuid.New(), Channel: ch, Priority: p, Status: domain.StatusProcessing, Attempts: 1}, true, nil
 }
 
+// fakeBackoff waits one second per attempt plus the provider's Retry-After, so tests can see
+// both reached it.
+type fakeBackoff struct{}
+
+func (fakeBackoff) Delay(attempt int, retryAfter time.Duration) time.Duration {
+	return time.Duration(attempt)*time.Second + retryAfter
+}
+
 // fakeLimiter answers every Wait with err (or, with ctxErr, the context's error) and records
 // the channels asked for. before runs first, e.g. to cancel the worker's context.
 type fakeLimiter struct {
@@ -108,7 +120,7 @@ func (l *fakeLimiter) Wait(ctx context.Context, ch domain.Channel) error {
 }
 
 func newTestDispatcher(q *fakeQueue) *Dispatcher {
-	return NewDispatcher(domain.ChannelSMS, q, &fakeSender{}, &fakeLimiter{}, time.Minute, slog.New(slog.DiscardHandler))
+	return NewDispatcher(domain.ChannelSMS, q, &fakeSender{}, &fakeLimiter{}, fakeBackoff{}, time.Minute, slog.New(slog.DiscardHandler))
 }
 
 // count tallies claims per priority.
@@ -173,7 +185,7 @@ func TestProcessNext_FallsBackWhenPreferredIsEmpty(t *testing.T) {
 // A dispatcher only ever claims its own channel (D16).
 func TestProcessNext_ClaimsOnlyItsChannel(t *testing.T) {
 	q := &fakeQueue{due: map[domain.Priority]int{domain.PriorityLow: 1}}
-	d := NewDispatcher(domain.ChannelEmail, q, &fakeSender{}, &fakeLimiter{}, time.Minute, slog.New(slog.DiscardHandler))
+	d := NewDispatcher(domain.ChannelEmail, q, &fakeSender{}, &fakeLimiter{}, fakeBackoff{}, time.Minute, slog.New(slog.DiscardHandler))
 
 	for range 2 { // one claim, then an empty queue
 		if _, err := d.ProcessNext(t.Context()); err != nil {
@@ -199,7 +211,7 @@ func TestProcessNext_WaitsForASlotBeforeSending(t *testing.T) {
 			t.Error("sent before the rate-limit slot was given")
 		}
 	}}
-	d := NewDispatcher(domain.ChannelPush, q, s, l, time.Minute, slog.New(slog.DiscardHandler))
+	d := NewDispatcher(domain.ChannelPush, q, s, l, fakeBackoff{}, time.Minute, slog.New(slog.DiscardHandler))
 
 	if found, err := d.ProcessNext(t.Context()); !found || err != nil {
 		t.Fatalf("ProcessNext = %v, %v; want a delivery", found, err)
@@ -215,7 +227,7 @@ func TestProcessNext_WaitsForASlotBeforeSending(t *testing.T) {
 // With an empty queue nothing is claimed, so no slot is taken (idle loops use none).
 func TestProcessNext_EmptyQueueTakesNoSlot(t *testing.T) {
 	l := &fakeLimiter{}
-	d := NewDispatcher(domain.ChannelSMS, &fakeQueue{due: map[domain.Priority]int{}}, &fakeSender{}, l, time.Minute, slog.New(slog.DiscardHandler))
+	d := NewDispatcher(domain.ChannelSMS, &fakeQueue{due: map[domain.Priority]int{}}, &fakeSender{}, l, fakeBackoff{}, time.Minute, slog.New(slog.DiscardHandler))
 	if _, err := d.ProcessNext(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +242,7 @@ func TestProcessNext_NoSlotPutsBackWithoutSending(t *testing.T) {
 	q := &fakeQueue{due: map[domain.Priority]int{domain.PriorityNormal: 1}}
 	s := &fakeSender{}
 	redisDown := errors.New("rate limit sms: connection refused")
-	d := NewDispatcher(domain.ChannelSMS, q, s, &fakeLimiter{err: redisDown}, time.Minute, slog.New(slog.DiscardHandler))
+	d := NewDispatcher(domain.ChannelSMS, q, s, &fakeLimiter{err: redisDown}, fakeBackoff{}, time.Minute, slog.New(slog.DiscardHandler))
 
 	found, err := d.ProcessNext(t.Context())
 	if !found || !errors.Is(err, redisDown) {
@@ -250,7 +262,7 @@ func TestProcessNext_ShutdownDuringWaitPutsBack(t *testing.T) {
 	q := &fakeQueue{due: map[domain.Priority]int{domain.PriorityNormal: 1}}
 	ctx, cancel := context.WithCancel(t.Context())
 	l := &fakeLimiter{before: cancel, ctxErr: true}
-	d := NewDispatcher(domain.ChannelSMS, q, &fakeSender{}, l, time.Minute, slog.New(slog.DiscardHandler))
+	d := NewDispatcher(domain.ChannelSMS, q, &fakeSender{}, l, fakeBackoff{}, time.Minute, slog.New(slog.DiscardHandler))
 
 	if _, err := d.ProcessNext(ctx); err != nil {
 		t.Fatalf("ProcessNext = %v, want nil", err)
@@ -290,7 +302,7 @@ func oneDue() *fakeQueue {
 
 func TestDeliver_Sent(t *testing.T) {
 	q, s := oneDue(), &fakeSender{}
-	found, err := NewDispatcher(domain.ChannelSMS, q, s, &fakeLimiter{}, time.Minute, slog.New(slog.DiscardHandler)).ProcessNext(t.Context())
+	found, err := NewDispatcher(domain.ChannelSMS, q, s, &fakeLimiter{}, fakeBackoff{}, time.Minute, slog.New(slog.DiscardHandler)).ProcessNext(t.Context())
 	if !found || err != nil {
 		t.Fatalf("ProcessNext = %v, %v", found, err)
 	}
@@ -314,24 +326,28 @@ func TestDeliver_MapsTheNotification(t *testing.T) {
 	}
 }
 
-// A provider failure is recorded with its error, and the log says whether it is temporary.
+// A temporary failure goes back to the queue for later, with the wait from the backoff and the
+// provider's Retry-After; a permanent one is final.
 func TestDeliver_Failed(t *testing.T) {
 	tests := []struct {
-		name          string
-		err           error
-		wantResult    string
-		wantTemporary bool
+		name       string
+		err        error
+		wantResult string
+		wantLog    string
 	}{
-		{"provider down", &provider.Error{StatusCode: 503, Err: errors.New("Service Unavailable")},
-			"failed:provider: status 503: Service Unavailable", true},
-		{"rejected", &provider.Error{StatusCode: 400, Err: errors.New("Bad Request")},
-			"failed:provider: status 400: Bad Request", false},
+		{"provider down: retry", &provider.Error{StatusCode: 503, Err: errors.New("Service Unavailable")},
+			"retry:provider: status 503: Service Unavailable in 1s", "notification failed, will retry"},
+		{"too many requests: Retry-After reaches the backoff",
+			&provider.Error{StatusCode: 429, RetryAfter: 30 * time.Second, Err: errors.New("Too Many Requests")},
+			"retry:provider: status 429: Too Many Requests in 31s", "notification failed, will retry"},
+		{"rejected: final", &provider.Error{StatusCode: 400, Err: errors.New("Bad Request")},
+			"failed:provider: status 400: Bad Request", "notification failed"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			q := oneDue()
 			var logs bytes.Buffer
-			d := NewDispatcher(domain.ChannelSMS, q, &fakeSender{err: tt.err}, &fakeLimiter{}, time.Minute,
+			d := NewDispatcher(domain.ChannelSMS, q, &fakeSender{err: tt.err}, &fakeLimiter{}, fakeBackoff{}, time.Minute,
 				slog.New(slog.NewJSONHandler(&logs, nil)))
 			if _, err := d.ProcessNext(t.Context()); err != nil {
 				t.Fatalf("ProcessNext: %v (a provider failure is recorded, not returned)", err)
@@ -340,14 +356,10 @@ func TestDeliver_Failed(t *testing.T) {
 				t.Errorf("results = %v, want [%s]", q.results, tt.wantResult)
 			}
 			var line struct {
-				Msg       string `json:"msg"`
-				Temporary *bool  `json:"temporary"`
+				Msg string `json:"msg"`
 			}
-			if err := json.Unmarshal(logs.Bytes(), &line); err != nil {
-				t.Fatalf("log %q: %v", logs.String(), err)
-			}
-			if line.Msg != "notification failed" || line.Temporary == nil || *line.Temporary != tt.wantTemporary {
-				t.Errorf("log = %s, want \"notification failed\" with temporary=%v", logs.String(), tt.wantTemporary)
+			if err := json.Unmarshal(logs.Bytes(), &line); err != nil || line.Msg != tt.wantLog {
+				t.Errorf("log = %s (%v), want %q", logs.String(), err, tt.wantLog)
 			}
 		})
 	}
@@ -359,7 +371,7 @@ func TestDeliver_CutOffByShutdown(t *testing.T) {
 	q := oneDue()
 	s := &fakeSender{before: cancel, err: context.Canceled}
 
-	if _, err := NewDispatcher(domain.ChannelSMS, q, s, &fakeLimiter{}, time.Minute, slog.New(slog.DiscardHandler)).ProcessNext(ctx); err != nil {
+	if _, err := NewDispatcher(domain.ChannelSMS, q, s, &fakeLimiter{}, fakeBackoff{}, time.Minute, slog.New(slog.DiscardHandler)).ProcessNext(ctx); err != nil {
 		t.Fatalf("ProcessNext: %v", err)
 	}
 	if len(q.results) != 1 || q.results[0] != "released" {
@@ -376,7 +388,7 @@ func TestDeliver_RecordsSentDuringShutdown(t *testing.T) {
 	q := oneDue()
 	s := &fakeSender{before: cancel} // cancelled, but the provider still answered 202
 
-	if _, err := NewDispatcher(domain.ChannelSMS, q, s, &fakeLimiter{}, time.Minute, slog.New(slog.DiscardHandler)).ProcessNext(ctx); err != nil {
+	if _, err := NewDispatcher(domain.ChannelSMS, q, s, &fakeLimiter{}, fakeBackoff{}, time.Minute, slog.New(slog.DiscardHandler)).ProcessNext(ctx); err != nil {
 		t.Fatalf("ProcessNext: %v", err)
 	}
 	if len(q.results) != 1 || q.results[0] != "sent:msg-1" || q.recordCtx != nil {

@@ -124,6 +124,7 @@ type notificationResponse struct {
 	Status            string     `json:"status"`
 	Attempts          int        `json:"attempts"`
 	LastError         *string    `json:"last_error,omitempty"`
+	NextAttemptAt     *time.Time `json:"next_attempt_at,omitempty"` // only while a retry is waiting
 	ProviderMessageID *string    `json:"provider_message_id,omitempty"`
 	CorrelationID     *string    `json:"correlation_id,omitempty"` // of the request that created it
 	CreatedAt         time.Time  `json:"created_at"`
@@ -131,6 +132,11 @@ type notificationResponse struct {
 }
 
 func toNotificationResponse(n domain.Notification) notificationResponse {
+	var next *time.Time
+	if n.Status == domain.StatusPending && n.Attempts > 0 { // failed before, waiting for its retry
+		t := n.NextAttemptAt.UTC()
+		next = &t
+	}
 	return notificationResponse{
 		ID:                n.ID,
 		BatchID:           n.BatchID,
@@ -141,6 +147,7 @@ func toNotificationResponse(n domain.Notification) notificationResponse {
 		Status:            string(n.Status),
 		Attempts:          n.Attempts,
 		LastError:         n.LastError,
+		NextAttemptAt:     next,
 		ProviderMessageID: n.ProviderMessageID,
 		CorrelationID:     n.CorrelationID,
 		CreatedAt:         n.CreatedAt.UTC(), // same time zone for every client

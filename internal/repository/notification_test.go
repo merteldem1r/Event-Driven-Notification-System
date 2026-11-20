@@ -940,6 +940,26 @@ func TestRecordResults(t *testing.T) {
 		}
 	})
 
+	// Back in the queue with the error, but not due until the delay has passed.
+	t.Run("retried", func(t *testing.T) {
+		n := claimOne(t)
+		before := time.Now()
+		if ok, err := repo.Retry(t.Context(), n.ID, n.Attempts, "provider: status 503", time.Minute); err != nil || !ok {
+			t.Fatalf("Retry = %v, %v", ok, err)
+		}
+		got, _ := repo.GetByID(t.Context(), n.ID)
+		if got.Status != domain.StatusPending || got.Attempts != 1 || got.LastError == nil ||
+			*got.LastError != "provider: status 503" || leaseOf(t, n.ID) != nil {
+			t.Errorf("after Retry: %+v; want pending, attempt 1 kept, the error, no lease", got)
+		}
+		if wait := got.NextAttemptAt.Sub(before); wait < 55*time.Second || wait > 65*time.Second {
+			t.Errorf("next attempt in %v, want about 1m", wait)
+		}
+		if _, ok, err := repo.ClaimNext(t.Context(), domain.ChannelSMS, domain.PriorityNormal, time.Minute); err != nil || ok {
+			t.Errorf("claim before the delay = %v, %v; want nothing due", ok, err)
+		}
+	})
+
 	t.Run("released", func(t *testing.T) {
 		n := claimOne(t)
 		if ok, err := repo.Release(t.Context(), n.ID, n.Attempts); err != nil || !ok {

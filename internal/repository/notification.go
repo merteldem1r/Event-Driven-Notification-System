@@ -201,6 +201,14 @@ func (r *Notifications) MarkFailed(ctx context.Context, id uuid.UUID, attempt in
 	return r.finish(ctx, id, attempt, `status = 'failed', last_error = $3`, lastError)
 }
 
+// Retry puts a notification back in the queue to be tried again after delay, keeping the error.
+// The attempt counts. The delay is added to the database's clock, like the lease.
+func (r *Notifications) Retry(ctx context.Context, id uuid.UUID, attempt int, lastError string, delay time.Duration) (ok bool, _ error) {
+	return r.finish(ctx, id, attempt,
+		`status = 'pending', last_error = $3, next_attempt_at = now() + $4 * interval '1 millisecond'`,
+		lastError, delay.Milliseconds())
+}
+
 // Release puts a notification back in the queue, e.g. when a send was interrupted by shutdown.
 // The attempt still counts: the provider may have received the message.
 func (r *Notifications) Release(ctx context.Context, id uuid.UUID, attempt int) (ok bool, _ error) {

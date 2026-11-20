@@ -825,6 +825,12 @@ components:
         last_error:
           type: string
           description: Why the last attempt failed. Present only after a failure.
+        next_attempt_at:
+          type: string
+          format: date-time
+          description: >-
+            When the next attempt is due, in UTC. Present only while a notification that failed
+            temporarily is waiting for its retry.
         provider_message_id:
           type: string
           description: The provider's ID for the message. Present once sent.

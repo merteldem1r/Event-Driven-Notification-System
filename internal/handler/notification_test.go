@@ -352,6 +352,30 @@ func TestGetNotification_Found(t *testing.T) {
 	}
 }
 
+// next_attempt_at is shown only while a retry is waiting, not for a new or finished notification.
+func TestNotificationResponse_NextAttemptOnlyWhileRetrying(t *testing.T) {
+	due := time.Date(2026, 11, 20, 10, 0, 10, 0, time.UTC)
+	tests := []struct {
+		name     string
+		status   domain.Status
+		attempts int
+		want     bool
+	}{
+		{"new, never tried", domain.StatusPending, 0, false},
+		{"waiting for a retry", domain.StatusPending, 1, true},
+		{"sent", domain.StatusSent, 1, false},
+		{"failed", domain.StatusFailed, 5, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := toNotificationResponse(domain.Notification{Status: tt.status, Attempts: tt.attempts, NextAttemptAt: due})
+			if (got.NextAttemptAt != nil) != tt.want || (tt.want && !got.NextAttemptAt.Equal(due)) {
+				t.Errorf("next_attempt_at = %v, want shown: %v", got.NextAttemptAt, tt.want)
+			}
+		})
+	}
+}
+
 func TestGetNotification_Errors(t *testing.T) {
 	tests := []struct {
 		name       string

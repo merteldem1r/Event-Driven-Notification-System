@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -16,6 +17,9 @@ import (
 
 // maxResponseBytes caps how much of a response is read; the expected one is under 200 bytes.
 const maxResponseBytes = 64 << 10
+
+// maxRetryAfter bounds a provider's Retry-After, so a huge value can't overflow a duration.
+const maxRetryAfter = 24 * time.Hour
 
 // maxIdleConns is how many open connections to the provider are kept for reuse. It must be at
 // least the number of sends at once (WORKER_CONCURRENCY x 3 channels), or the rest reconnect
@@ -41,6 +45,7 @@ type Receipt struct {
 // Error is a failed send. StatusCode is 0 when no response arrived (timeout, network error).
 type Error struct {
 	StatusCode int
+	RetryAfter time.Duration // how long the provider asked us to wait (Retry-After); 0 if it didn't
 	Err        error
 }
 
@@ -76,6 +81,30 @@ func (e *Error) Temporary() bool {
 func IsTemporary(err error) bool {
 	var pe *Error
 	return errors.As(err, &pe) && pe.Temporary()
+}
+
+// RetryAfter returns how long the provider asked us to wait before trying again, or 0.
+func RetryAfter(err error) time.Duration {
+	var pe *Error
+	if errors.As(err, &pe) {
+		return pe.RetryAfter
+	}
+	return 0
+}
+
+// parseRetryAfter reads a Retry-After header, either seconds ("30") or an HTTP date. A
+// missing, invalid or past value gives 0.
+func parseRetryAfter(h string, now time.Time) time.Duration {
+	if h == "" {
+		return 0
+	}
+	if s, err := strconv.Atoi(h); err == nil {
+		return time.Duration(max(0, min(int64(s), int64(maxRetryAfter/time.Second)))) * time.Second
+	}
+	if t, err := http.ParseTime(h); err == nil {
+		return max(0, min(t.Sub(now), maxRetryAfter))
+	}
+	return 0
 }
 
 // Client sends messages to the provider's URL.
@@ -142,7 +171,11 @@ func (c *Client) Send(ctx context.Context, m Message) (Receipt, error) {
 		return Receipt{}, &Error{StatusCode: resp.StatusCode, Err: fmt.Errorf("read response: %w", err)}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return Receipt{}, &Error{StatusCode: resp.StatusCode, Err: errors.New(http.StatusText(resp.StatusCode))}
+		return Receipt{}, &Error{
+			StatusCode: resp.StatusCode,
+			RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
+			Err:        errors.New(http.StatusText(resp.StatusCode)),
+		}
 	}
 
 	var r response

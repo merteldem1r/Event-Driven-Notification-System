@@ -19,6 +19,7 @@ import (
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/provider"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/ratelimit"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/repository"
+	"github.com/merteldem1r/Event-Driven-Notification-System/internal/retry"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/service"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/worker"
 )
@@ -85,12 +86,14 @@ func run() error {
 	queue := repository.NewNotifications(db)
 	sender := provider.NewClient(cfg.ProviderURL, cfg.ProviderTimeout)
 	limiter := ratelimit.New(rdb, cfg.RateLimitPerSecond, cfg.RateLimitBurst)
+	backoff := retry.New(cfg.RetryBaseDelay, cfg.RetryMaxDelay)
 	var dispatchers []worker.Processor
 	for _, ch := range domain.Channels() {
 		dispatchers = append(dispatchers,
-			service.NewDispatcher(ch, queue, sender, limiter, cfg.WorkerLeaseDuration, logger))
+			service.NewDispatcher(ch, queue, sender, limiter, backoff, cfg.WorkerLeaseDuration, logger))
 	}
 	slog.Info("rate limit per channel", "per_second", cfg.RateLimitPerSecond, "burst", cfg.RateLimitBurst)
+	slog.Info("retries", "base_delay", cfg.RetryBaseDelay.String(), "max_delay", cfg.RetryMaxDelay.String())
 	w := worker.New(dispatchers, worker.Config{
 		Concurrency:     cfg.WorkerConcurrency,
 		PollInterval:    cfg.WorkerPollInterval,

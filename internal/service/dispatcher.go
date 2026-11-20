@@ -20,8 +20,15 @@ type Queue interface {
 	ClaimNext(ctx context.Context, ch domain.Channel, p domain.Priority, lease time.Duration) (_ domain.Notification, ok bool, _ error)
 	MarkSent(ctx context.Context, id uuid.UUID, attempt int, providerMessageID string) (ok bool, _ error)
 	MarkFailed(ctx context.Context, id uuid.UUID, attempt int, lastError string) (ok bool, _ error)
+	Retry(ctx context.Context, id uuid.UUID, attempt int, lastError string, delay time.Duration) (ok bool, _ error)
 	Release(ctx context.Context, id uuid.UUID, attempt int) (ok bool, _ error)
 	Unclaim(ctx context.Context, id uuid.UUID, attempt int) (ok bool, _ error)
+}
+
+// Backoff says how long to wait after failed attempt number attempt, given how long the
+// provider asked us to wait (0 if it didn't).
+type Backoff interface {
+	Delay(attempt int, retryAfter time.Duration) time.Duration
 }
 
 // Limiter hands out rate-limit slots per channel, shared by all workers (D15).
@@ -52,15 +59,19 @@ type Dispatcher struct {
 	queue   Queue
 	sender  Sender
 	limiter Limiter
+	backoff Backoff
 	lease   time.Duration
 	logger  *slog.Logger
 	turn    atomic.Uint64 // position in claimPattern, shared by this channel's worker loops
 }
 
 // NewDispatcher returns a Dispatcher for channel ch that leases each claimed notification for
-// lease, waits for a slot of limiter, and sends it through sender.
-func NewDispatcher(ch domain.Channel, queue Queue, sender Sender, limiter Limiter, lease time.Duration, logger *slog.Logger) *Dispatcher {
-	return &Dispatcher{channel: ch, queue: queue, sender: sender, limiter: limiter, lease: lease, logger: logger}
+// lease, waits for a slot of limiter, sends it through sender, and retries temporary failures
+// after the wait backoff gives.
+func NewDispatcher(ch domain.Channel, queue Queue, sender Sender, limiter Limiter, backoff Backoff,
+	lease time.Duration, logger *slog.Logger,
+) *Dispatcher {
+	return &Dispatcher{channel: ch, queue: queue, sender: sender, limiter: limiter, backoff: backoff, lease: lease, logger: logger}
 }
 
 // ProcessNext takes the next notification of the channel and delivers it; found is false if
@@ -92,7 +103,7 @@ func (d *Dispatcher) claimOrder() []domain.Priority {
 }
 
 // deliver waits for a rate-limit slot, sends a claimed notification and records the result:
-// sent, failed, or back to pending if shutdown cut it off. A failure to record, or to get a
+// sent, back to pending for a later retry, failed, or back to pending if shutdown cut it off. A failure to record, or to get a
 // slot, is returned.
 func (d *Dispatcher) deliver(ctx context.Context, n domain.Notification) error {
 	if n.CorrelationID != nil { // the API's ID, so one search finds the request and its delivery
@@ -124,11 +135,14 @@ func (d *Dispatcher) deliver(ctx context.Context, n domain.Notification) error {
 	case ctx.Err() != nil: // we gave up at the shutdown deadline; the provider didn't fail
 		recorded, err = d.queue.Release(rec, n.ID, n.Attempts)
 		log.WarnContext(ctx, "send cut off by shutdown, notification back in the queue", "duration_ms", took)
-	default:
-		// Final for now; 8.2 retries temporary errors with backoff instead.
+	case provider.IsTemporary(sendErr): // a retry may work (D18): try again later (D8)
+		delay := d.backoff.Delay(n.Attempts, provider.RetryAfter(sendErr))
+		recorded, err = d.queue.Retry(rec, n.ID, n.Attempts, sendErr.Error(), delay)
+		log.WarnContext(ctx, "notification failed, will retry", "error", sendErr, "temporary", true,
+			"retry_in", delay.Round(time.Millisecond).String(), "duration_ms", took)
+	default: // the provider rejected it: a retry would fail the same way
 		recorded, err = d.queue.MarkFailed(rec, n.ID, n.Attempts, sendErr.Error())
-		log.WarnContext(ctx, "notification failed", "error", sendErr, "temporary", provider.IsTemporary(sendErr),
-			"duration_ms", took)
+		log.WarnContext(ctx, "notification failed", "error", sendErr, "temporary", false, "duration_ms", took)
 	}
 	if err != nil {
 		return fmt.Errorf("record result: %w", err)

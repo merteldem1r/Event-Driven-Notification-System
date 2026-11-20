@@ -17,7 +17,7 @@
 | D5 | Batch validation: all-or-nothing vs partial | Phase 5 (batch API) | Decided: all-or-nothing |
 | D6 | Pagination: offset vs cursor | Phase 5 (list API) | Decided: cursor |
 | D7 | Priority strategy: strict vs weighted | Phase 6 (worker) | Decided: weighted 6:3:1 |
-| D8 | Retry numbers: attempts, delays, lease time | Phase 8 (retries) | Later |
+| D8 | Retry numbers: attempts, delays, lease time | Phase 8 (retries) | Decided: 5 attempts; 10 s doubling to 10 min, equal jitter; longer `Retry-After` wins, same cap; lease in 8.4 |
 | D9 | Default provider in docker-compose: mock vs webhook.site | Phase 6 (provider), revised in Phase 7 | Decided: own fake provider by default, webhook.site via `PROVIDER_URL` |
 | D10 | Loading a local `.env.local` for development | Phase 2 | Decided: godotenv |
 | D11 | API error format, create response, unknown JSON fields | Phase 4 (create API) | Decided: own envelope, full notification, reject |
@@ -422,6 +422,33 @@ provider the margin may be tuned with `RATE_LIMIT_PER_SECOND` once its own count
 
 ---
 
+## D8 — Retry numbers
+
+A temporary failure (D18) goes back to `pending` with `next_attempt_at` moved into the future;
+the claim already skips rows that aren't due, so the database holds it until then. Four
+choices:
+
+- **Waits (exponential backoff: each wait doubles).** Starting at 1 s (1, 2, 4, 8 s, giving up
+  after ~15 s) covers blips but nothing longer. Starting at 10 s (10, 20, 40, 80 s, ~2.5 min)
+  also covers a provider restart or deploy. Starting at 30 s with 8 attempts (~35 min) covers
+  long outages, but a login code arriving half an hour late is useless.
+- **Jitter.** Without it, everything that failed together retries together. Full jitter (0
+  to the wait) spreads best but retries some almost at once; equal jitter (half to all of the
+  wait) always pauses.
+- **`Retry-After`.** Ignore it; always obey it (a provider saying "2 days" parks the
+  notification for 2 days); or use the longer of it and our wait, capped.
+- **Max attempts.** 3 (~30 s), 5 (~2.5 min) or 8 (~20 min) with the 10 s start.
+
+Chosen: **5 attempts; waits start at 10 s and double, capped at 10 min; equal jitter; the
+provider's `Retry-After` is used when longer, within the same cap.** So the waits are 5-10 s,
+10-20 s, 20-40 s and 40-80 s. Longer outages are for the circuit breaker and the re-queue
+endpoint (8.5), not for ever longer waits. A wait asked for by `Retry-After` still counts as an
+attempt, so a provider that always answers `429` can't keep a notification forever. Settings:
+`RETRY_BASE_DELAY` (10s), `RETRY_MAX_DELAY` (10m); the maximum attempts come with 8.3. The
+delay is added to the database's clock, like the lease. The lease (60 s) is confirmed in 8.4.
+
+---
+
 ## D18 — Which provider errors are worth retrying
 
 RET-1 asks to retry temporary failures (timeout, network, 5xx, 429) and not permanent ones
@@ -487,4 +514,5 @@ queue (Phase 6).
 | D17 | Meaning of "max 100/s" | **At most 100 per channel at the provider in any one-second window**; workers send at **85/s with burst 5** (at most 90 allowed); provider client keeps up to 1,000 idle connections; the fake provider measures the busiest window at arrival (`GET /_stats`) and `make loadtest` fails above 100 | The strict reading, judged where it matters; measured 90 to 93 with 3 and 5 workers | About 15% of the top speed (85 instead of 100 per second per channel) | 2026-11-20 |
 | D18 | Provider errors worth retrying | **Temporary: no response, `408`, `429`, `5xx`, `2xx` without a `messageId`; permanent: `3xx`, other `4xx`, errors before sending**; decided by `provider.IsTemporary` | Retries only where they can help; a garbled receipt is retried with the same `Idempotency-Key` | A possible duplicate from a provider that ignores `Idempotency-Key` and sends a broken receipt | 2026-11-20 |
 | D9 | Provider | **webhook.site only, for now**: the worker sends to `PROVIDER_URL` (your own webhook.site URL, set to answer `202 {messageId, status, timestamp}`); an own local fake provider is noted in the plan as an optional later step | Exactly the integration the requirements ask for; less code now; every send is visible in the browser | Offline runs; load tests beyond webhook.site's free request limit; a provider that fails or slows down on purpose for retry tests (until the fake is added) | 2026-11-20 |
-| D9 (revised) | Provider | **Own fake provider by default** (`cmd/fakeprovider`, `internal/fakeprovider`): answers `POST` on any path like webhook.site with `202 {messageId, status, timestamp}`; `FAKE_PROVIDER_LATENCY` (default 50ms) and `FAKE_PROVIDER_FAILURE_RATE` (share answered `503`); logs the messages received per channel each second; a Compose service the worker uses unless `PROVIDER_URL` is set (e.g. to webhook.site in `.env`) | Load tests at 100/s per channel without webhook.site's free request limit; provider failures on demand for Phase 8; works offline; the per-second report measures the rate limit | A second, simpler provider than the real one (no `429`, no `Retry-After` yet; added when Phase 8 needs them) | 2026-11-20 |
+| D8 | Retry numbers | **5 attempts; waits start at 10 s and double, capped at 10 min; equal jitter (half to all of the wait); `Retry-After` used when longer, same cap**; `RETRY_BASE_DELAY`, `RETRY_MAX_DELAY` | Covers blips and short outages (~2.5 min in total) while messages are still useful; retries that failed together are spread out; never earlier than the provider asked, never parked for days | Survival of long outages by waiting alone (8.5 handles those) | 2026-11-20 |
+\1 **Own fake provider by default** (`cmd/fakeprovider`, `internal/fakeprovider`): answers `POST` on any path like webhook.site with `202 {messageId, status, timestamp}`; `FAKE_PROVIDER_LATENCY` (default 50ms) and `FAKE_PROVIDER_FAILURE_RATE` (share answered `503`); logs the messages received per channel each second; a Compose service the worker uses unless `PROVIDER_URL` is set (e.g. to webhook.site in `.env`) | Load tests at 100/s per channel without webhook.site's free request limit; provider failures on demand for Phase 8; works offline; the per-second report measures the rate limit | A second, simpler provider than the real one (no `429`, no `Retry-After` yet; added when Phase 8 needs them) | 2026-11-20 |

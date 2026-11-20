@@ -41,6 +41,8 @@ services:
       # Empty unless set in the shell or .env: then the defaults in internal/config apply.
       RATE_LIMIT_PER_SECOND: ${RATE_LIMIT_PER_SECOND:-}
       RATE_LIMIT_BURST: ${RATE_LIMIT_BURST:-}
+      RETRY_BASE_DELAY: ${RETRY_BASE_DELAY:-}
+      RETRY_MAX_DELAY: ${RETRY_MAX_DELAY:-}
       # The fake provider unless PROVIDER_URL is set (shell or .env).
       PROVIDER_URL: ${PROVIDER_URL:-http://fakeprovider:9090/}
     # docker stop sends SIGTERM and kills after this long. Longer than WORKER_SHUTDOWN_TIMEOUT (25s),

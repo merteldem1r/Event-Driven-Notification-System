@@ -188,6 +188,45 @@ func TestIsTemporary(t *testing.T) {
 	}
 }
 
+// The provider's Retry-After reaches the caller with the error (RET-4).
+func TestSend_RetryAfter(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "30")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := NewClient(srv.URL, time.Second).Send(t.Context(), testMessage)
+	if got := RetryAfter(err); got != 30*time.Second {
+		t.Errorf("RetryAfter = %v, want 30s (err %v)", got, err)
+	}
+	if got := RetryAfter(errors.New("other")); got != 0 {
+		t.Errorf("RetryAfter of a non-provider error = %v, want 0", got)
+	}
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	now := time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC)
+	tests := []struct {
+		header string
+		want   time.Duration
+	}{
+		{"", 0},
+		{"30", 30 * time.Second},
+		{"0", 0},
+		{"-5", 0},
+		{"99999999999999", 24 * time.Hour}, // bounded, no overflow
+		{"Fri, 20 Nov 2026 10:02:00 GMT", 2 * time.Minute},
+		{"Fri, 20 Nov 2026 09:00:00 GMT", 0}, // already past
+		{"soon", 0},
+	}
+	for _, tt := range tests {
+		if got := parseRetryAfter(tt.header, now); got != tt.want {
+			t.Errorf("parseRetryAfter(%q) = %v, want %v", tt.header, got, tt.want)
+		}
+	}
+}
+
 // A provider URL that can't be used is our mistake: retrying can't fix it.
 func TestSend_BadURLIsPermanent(t *testing.T) {
 	_, err := NewClient("http://bad host/", time.Second).Send(t.Context(), testMessage)

@@ -28,6 +28,9 @@ type Config struct {
 	ProviderURL     string        // where the worker sends notifications (D9: webhook.site); empty if unset
 	ProviderTimeout time.Duration // limit for one send
 
+	RetryBaseDelay time.Duration // wait after the first temporary failure, doubled each time (D8)
+	RetryMaxDelay  time.Duration // longest wait between attempts, also for the provider's Retry-After
+
 	RedisURL           string // Redis for the shared rate limiter; empty if unset
 	RateLimitPerSecond int    // sends per second per channel, for all workers together; below the provider's limit (D17)
 	RateLimitBurst     int    // sends allowed at once after an idle moment
@@ -100,6 +103,18 @@ func Load() (Config, error) {
 		return Config{}, errors.New("WORKER_LEASE_DURATION must be longer than PROVIDER_TIMEOUT")
 	}
 
+	retryBase, err := positiveDuration("RETRY_BASE_DELAY", "10s")
+	if err != nil {
+		return Config{}, err
+	}
+	retryMax, err := positiveDuration("RETRY_MAX_DELAY", "10m")
+	if err != nil {
+		return Config{}, err
+	}
+	if retryBase > retryMax {
+		return Config{}, errors.New("RETRY_BASE_DELAY must not be longer than RETRY_MAX_DELAY")
+	}
+
 	redisURL := os.Getenv("REDIS_URL")
 	if redisURL != "" {
 		u, err := url.Parse(redisURL)
@@ -122,6 +137,7 @@ func Load() (Config, error) {
 		WorkerConcurrency: concurrency, WorkerPollInterval: poll, WorkerShutdownTimeout: shutdown,
 		WorkerLeaseDuration: lease,
 		ProviderURL:         providerURL, ProviderTimeout: providerTimeout,
+		RetryBaseDelay: retryBase, RetryMaxDelay: retryMax,
 		RedisURL: redisURL, RateLimitPerSecond: perSecond, RateLimitBurst: burst,
 	}, nil
 }
