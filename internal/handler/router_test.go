@@ -38,7 +38,7 @@ func TestRouter_UnknownRoutesAndMethods(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequestWithContext(t.Context(), tt.method, tt.path, nil)
 			rec := httptest.NewRecorder()
-			NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, &fakeNotificationService{}).ServeHTTP(rec, req)
+			NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, &fakeNotificationService{}, nil).ServeHTTP(rec, req)
 
 			if rec.Code != tt.wantStatus {
 				t.Errorf("status = %d, want %d", rec.Code, tt.wantStatus)

@@ -15,6 +15,7 @@ import (
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/database"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/handler"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/logging"
+	"github.com/merteldem1r/Event-Driven-Notification-System/internal/metrics"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/repository"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/service"
 )
@@ -55,11 +56,16 @@ func run() error {
 	slog.Info("connected to database")
 
 	// Wire the layers: repository -> service -> HTTP handlers.
-	notifications := service.NewNotifications(repository.NewNotifications(db))
+	repo := repository.NewNotifications(db)
+	notifications := service.NewNotifications(repo)
+
+	// Metrics at /metrics: HTTP requests, the queue (counted in the database), Go runtime (D20).
+	reg := metrics.NewRegistry()
+	reg.MustRegister(metrics.NewQueueCollector(repo))
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.HTTPPort),
-		Handler: handler.NewRouter(logger, db, notifications),
+		Handler: handler.NewRouter(logger, db, notifications, reg),
 		// Protect against slow or stuck clients.
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,

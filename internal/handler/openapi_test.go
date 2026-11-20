@@ -13,6 +13,7 @@ import (
 	"github.com/getkin/kin-openapi/routers/legacy"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/domain"
 )
@@ -45,7 +46,7 @@ func TestOpenAPI_DocumentsExactlyTheRoutes(t *testing.T) {
 	}
 
 	inRouter := map[string]bool{}
-	router := NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, &fakeNotificationService{})
+	router := NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, &fakeNotificationService{}, prometheus.NewRegistry())
 	walk := func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
 		inRouter[method+" "+route] = true
 		return nil
@@ -137,7 +138,7 @@ func TestOpenAPI_ResponsesMatchSpec(t *testing.T) {
 				req.Header.Set(tt.headers[i], tt.headers[i+1])
 			}
 			rec := httptest.NewRecorder()
-			NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, tt.svc).ServeHTTP(rec, req)
+			NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, tt.svc, nil).ServeHTTP(rec, req)
 
 			route, params, err := specRouter.FindRoute(req)
 			if err != nil {

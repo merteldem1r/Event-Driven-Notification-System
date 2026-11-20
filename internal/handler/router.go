@@ -9,15 +9,20 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
-// NewRouter builds the HTTP router.
-func NewRouter(logger *slog.Logger, db Pinger, notifications NotificationService) http.Handler {
+// NewRouter builds the HTTP router. With a registry, requests are measured and its metrics are
+// served at /metrics; tests that don't need metrics pass nil.
+func NewRouter(logger *slog.Logger, db Pinger, notifications NotificationService, reg *prometheus.Registry) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(CorrelationID)         // first, so every later log line has the ID
 	r.Use(RequestLogger(logger)) // before Recoverer, so it also logs the 500s Recoverer produces
-	r.Use(middleware.Recoverer)  // panic -> 500 instead of a crash
+	if reg != nil {
+		r.Use(RequestMetrics(reg)) // also before Recoverer, to count the 500s
+	}
+	r.Use(middleware.Recoverer) // panic -> 500 instead of a crash
 
 	// Unknown URLs and wrong methods use the same JSON error format as everything else (D11).
 	r.NotFound(routeNotFound)
@@ -25,6 +30,9 @@ func NewRouter(logger *slog.Logger, db Pinger, notifications NotificationService
 
 	// Operational endpoints stay outside the versioned API.
 	r.Get("/health", Health(db, logger))
+	if reg != nil {
+		r.Method(http.MethodGet, "/metrics", Metrics(reg, logger))
+	}
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/notifications", ListNotifications(notifications, logger))

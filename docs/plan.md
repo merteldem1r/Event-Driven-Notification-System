@@ -9,7 +9,7 @@ is tested. Then we stop, explain it, and the user commits it.
 
 Status: `[x]` done, `[ ]` not done. The next step is marked **(next)**.
 
-> **Current position:** Phase 9, step **9.1** (Prometheus metrics).
+> **Current position:** Phase 9, step **9.2** (worker `/metrics` and `/health`).
 
 ---
 
@@ -102,8 +102,8 @@ asking for it.
 (15.2, 15.3), then at most one optional feature (scheduled notifications is the cheapest).
 
 ## Phase 9 · Observability
-- [ ] 9.1 Prometheus metrics: queue depth, sent/failed counters, latency histograms (OBS-1) **(next)**
-- [ ] 9.2 `/metrics` on API and worker; worker health endpoint checking PostgreSQL and Redis (D16, OBS-4)
+- [x] 9.1 API metrics (D20): `GET /metrics` (`internal/metrics`, own registry): `notifications_queue_depth{channel,status}` and `notifications_queue_oldest_due_seconds{channel}` counted in the database on each scrape (`repository.QueueStats`); `http_requests_total` and `http_request_duration_seconds` per route pattern; Go runtime metrics; documented in OpenAPI (OBS-1)
+- [ ] 9.2 Worker HTTP server: `/metrics` with `notifications_send_total{channel,result}`, provider-call and end-to-end latency histograms, recovered leases (D20); `/health` checking PostgreSQL and Redis (D16) (OBS-1, OBS-4) **(next)**
 - [x] 9.3 Correlation ID carried into worker logs (OBS-2, OBS-3); done early in 6.2
 
 ## Phase 10–14 · Optional features

@@ -29,6 +29,7 @@
 | D17 | What "max 100 per second" means, and the headroom | Phase 7 (load test) | Decided: at most 100 at the provider in any one second; send at 85/s, burst 5 |
 | D18 | Which provider errors are worth retrying | Phase 8 (retries) | Decided: no response, 408, 429, 5xx, and 2xx without a receipt; not 3xx or other 4xx |
 | D19 | How notifications of a crashed worker are taken back | Phase 8 (retries) | Decided: a sweep every 10 s puts expired leases back in the queue |
+| D20 | Metrics: queue depth, send results, latency, HTTP | Phase 9 (observability) | Decided: queue counted on each scrape; one send counter with `result`; two latency histograms; HTTP request metrics |
 
 **Why only D1–D3 now?** They decide *what the database schema looks like, how workers are
 written, and what runs in docker-compose*. Changing them later means rewriting a lot.
@@ -504,6 +505,36 @@ it can drop the repeat.
 
 ---
 
+## D20 — Metrics
+
+Prometheus reads `GET /metrics` every few seconds and keeps the history; the service only has
+to keep the numbers right. The requirement asks for queue depth, success and failure rates,
+and latency. Four choices:
+
+- **Queue depth.** The queue is shared by every API and worker process, so no single process
+  can keep a count by adding and subtracting. Count it in the database on each scrape (always
+  exact, one small query every few seconds), or recount it in a background loop (the same
+  query, but the number can be stale).
+- **Send results.** One counter with a `result` label (`sent`, `retry`, `failed`,
+  `interrupted`), or one counter per outcome.
+- **Latency.** Only the provider call, or also end to end (from `created_at` to `sent`, which
+  includes queue time and retries).
+- **HTTP request metrics** on the API: count and duration per route and status, or none.
+
+Chosen: **the queue counted on each scrape**, plus the age of the oldest due notification per
+channel, the clearest single sign of falling behind; **one send counter with a `result`
+label**, so every attempt is counted once by how it ended; **both latencies, as two
+histograms**; and **HTTP request metrics** labelled with chi's route pattern, so
+`/notifications/{id}` is one series for every ID and unknown URLs share one `unmatched` series.
+
+Details: each program uses its own registry instead of the library's global one (no globals,
+fresh in tests). The queue query has a 2 s limit; if it fails, the rest of `/metrics` is still
+served and the error is logged. With several API instances each reports the same queue
+numbers, so dashboards read them with `max`. The API serves its metrics in 9.1, the worker in
+9.2.
+
+---
+
 ## Resulting architecture
 
 ```
@@ -547,6 +578,7 @@ it can drop the repeat.
 | D17 | Meaning of "max 100/s" | **At most 100 per channel at the provider in any one-second window**; workers send at **85/s with burst 5** (at most 90 allowed); provider client keeps up to 1,000 idle connections; the fake provider measures the busiest window at arrival (`GET /_stats`) and `make loadtest` fails above 100 | The strict reading, judged where it matters; measured 90 to 93 with 3 and 5 workers | About 15% of the top speed (85 instead of 100 per second per channel) | 2026-11-20 |
 | D18 | Provider errors worth retrying | **Temporary: no response, `408`, `429`, `5xx`, `2xx` without a `messageId`; permanent: `3xx`, other `4xx`, errors before sending**; decided by `provider.IsTemporary` | Retries only where they can help; a garbled receipt is retried with the same `Idempotency-Key` | A possible duplicate from a provider that ignores `Idempotency-Key` and sends a broken receipt | 2026-11-20 |
 | D19 | Crashed worker recovery | **A sweep in every worker, every 10 s, puts `processing` rows with an expired lease back to `pending`** (attempt kept, `last_error` says why); lease 60 s; partial index on `locked_until` | The claim query stays simple; a stopped worker's notification is sent again within ~70 s; a late result from a slow worker is refused by the attempt check | Up to ~70 s delay after a crash; a possible duplicate if the crashed request had reached the provider | 2026-11-20 |
+| D20 | Metrics | **API:** `notifications_queue_depth{channel,status}` and `notifications_queue_oldest_due_seconds{channel}` counted in the database on each scrape; `http_requests_total{method,route,status}`, `http_request_duration_seconds{method,route}`. **Worker (9.2):** `notifications_send_total{channel,result}`, provider-call and end-to-end latency histograms, recovered leases. Own registry per program | Exact queue numbers without coordination between processes; success rate from one counter; latency seen both at the provider and by the customer; bounded series (route patterns, not URLs) | One small query per scrape; the same queue numbers from every API instance | 2026-11-20 |
 | D9 | Provider | **webhook.site only, for now**: the worker sends to `PROVIDER_URL` (your own webhook.site URL, set to answer `202 {messageId, status, timestamp}`); an own local fake provider is noted in the plan as an optional later step | Exactly the integration the requirements ask for; less code now; every send is visible in the browser | Offline runs; load tests beyond webhook.site's free request limit; a provider that fails or slows down on purpose for retry tests (until the fake is added) | 2026-11-20 |
 | D8 | Retry numbers | **5 attempts; waits start at 10 s and double, capped at 10 min; equal jitter (half to all of the wait); `Retry-After` used when longer, same cap**; then `failed` with the last error; `RETRY_MAX_ATTEMPTS`, `RETRY_BASE_DELAY`, `RETRY_MAX_DELAY` | Covers blips and short outages (~2.5 min in total) while messages are still useful; retries that failed together are spread out; never earlier than the provider asked, never parked for days | Survival of long outages by waiting alone (8.5 handles those) | 2026-11-20 |
 \1 **Own fake provider by default** (`cmd/fakeprovider`, `internal/fakeprovider`): answers `POST` on any path like webhook.site with `202 {messageId, status, timestamp}`; `FAKE_PROVIDER_LATENCY` (default 50ms) and `FAKE_PROVIDER_FAILURE_RATE` (share answered `503`); logs the messages received per channel each second; a Compose service the worker uses unless `PROVIDER_URL` is set (e.g. to webhook.site in `.env`) | Load tests at 100/s per channel without webhook.site's free request limit; provider failures on demand for Phase 8; works offline; the per-second report measures the rate limit | A second, simpler provider than the real one (no `429`, no `Retry-After` yet; added when Phase 8 needs them) | 2026-11-20 |

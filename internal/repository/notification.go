@@ -201,6 +201,36 @@ func (r *Notifications) MarkFailed(ctx context.Context, id uuid.UUID, attempt in
 	return r.finish(ctx, id, attempt, `status = 'failed', last_error = $3`, lastError)
 }
 
+// QueueStats counts the pending and processing notifications per channel, and how long the
+// oldest due pending one has waited. Each half uses its partial index, so it stays cheap.
+func (r *Notifications) QueueStats(ctx context.Context) ([]domain.QueueStat, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT channel, 'pending'::text, count(*),
+		       COALESCE(EXTRACT(EPOCH FROM now() - min(next_attempt_at) FILTER (WHERE next_attempt_at <= now())), 0)::float8
+		FROM notifications WHERE status = 'pending' GROUP BY channel
+		UNION ALL
+		SELECT channel, 'processing'::text, count(*), 0::float8
+		FROM notifications WHERE status = 'processing' GROUP BY channel`)
+	if err != nil {
+		return nil, fmt.Errorf("queue stats: %w", err)
+	}
+	defer rows.Close()
+	var stats []domain.QueueStat
+	for rows.Next() {
+		var s domain.QueueStat
+		var oldest float64
+		if err := rows.Scan(&s.Channel, &s.Status, &s.Count, &oldest); err != nil {
+			return nil, fmt.Errorf("queue stats: %w", err)
+		}
+		s.OldestDue = time.Duration(oldest * float64(time.Second))
+		stats = append(stats, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("queue stats: %w", err)
+	}
+	return stats, nil
+}
+
 // leaseExpiredError is the last_error of a notification taken back from a stopped worker.
 const leaseExpiredError = "lease expired: the worker stopped before recording a result"
 

@@ -149,7 +149,7 @@ func postNotification(t *testing.T, svc NotificationService, body string, header
 		req.Header.Set(headers[i], headers[i+1])
 	}
 	rec := httptest.NewRecorder()
-	NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, svc).ServeHTTP(rec, req)
+	NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, svc, nil).ServeHTTP(rec, req)
 	return rec
 }
 
@@ -334,7 +334,7 @@ func getNotification(t *testing.T, svc NotificationService, id string) *httptest
 	t.Helper()
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/notifications/"+id, nil)
 	rec := httptest.NewRecorder()
-	NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, svc).ServeHTTP(rec, req)
+	NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, svc, nil).ServeHTTP(rec, req)
 	return rec
 }
 
@@ -418,7 +418,7 @@ func postBatch(t *testing.T, svc NotificationService, body string, headers ...st
 		req.Header.Set(headers[i], headers[i+1])
 	}
 	rec := httptest.NewRecorder()
-	NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, svc).ServeHTTP(rec, req)
+	NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, svc, nil).ServeHTTP(rec, req)
 	return rec
 }
 
@@ -530,7 +530,7 @@ func getBatch(t *testing.T, svc NotificationService, id string) *httptest.Respon
 	t.Helper()
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/batches/"+id, nil)
 	rec := httptest.NewRecorder()
-	NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, svc).ServeHTTP(rec, req)
+	NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, svc, nil).ServeHTTP(rec, req)
 	return rec
 }
 
@@ -574,7 +574,7 @@ func cancelNotification(t *testing.T, svc NotificationService, id string) *httpt
 	t.Helper()
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/notifications/"+id+"/cancel", nil)
 	rec := httptest.NewRecorder()
-	NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, svc).ServeHTTP(rec, req)
+	NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, svc, nil).ServeHTTP(rec, req)
 	return rec
 }
 
@@ -622,7 +622,7 @@ func TestCancelNotification_Errors(t *testing.T) {
 func TestCancelBatch(t *testing.T) {
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/batches/"+fakeBatchID.String()+"/cancel", nil)
 	rec := httptest.NewRecorder()
-	NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, &fakeNotificationService{}).ServeHTTP(rec, req)
+	NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, &fakeNotificationService{}, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body)
@@ -637,7 +637,7 @@ func TestCancelBatch(t *testing.T) {
 	// Errors work as for batch status.
 	req = httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/batches/"+uuid.NewString()+"/cancel", nil)
 	rec = httptest.NewRecorder()
-	NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, &fakeNotificationService{}).ServeHTTP(rec, req)
+	NewRouter(slog.New(slog.DiscardHandler), fakePinger{}, &fakeNotificationService{}, nil).ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("unknown batch: status = %d, want 404", rec.Code)
 	}

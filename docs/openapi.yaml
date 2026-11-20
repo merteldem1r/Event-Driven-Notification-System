@@ -564,6 +564,31 @@ paths:
                 checks:
                   database: unreachable
 
+  /metrics:
+    get:
+      tags: [operations]
+      operationId: metrics
+      summary: Prometheus metrics
+      description: |
+        Metrics in Prometheus's text format, read by Prometheus every few seconds:
+        `notifications_queue_depth{channel,status}` (pending and processing, counted in the
+        database on each read), `notifications_queue_oldest_due_seconds{channel}`,
+        `http_requests_total{method,route,status}`, `http_request_duration_seconds{method,route}`,
+        and Go runtime metrics. With several API instances, each reports the same queue numbers.
+      responses:
+        "200":
+          description: The metrics.
+          headers:
+            X-Correlation-ID:
+              $ref: "#/components/headers/CorrelationID"
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: |
+                # TYPE notifications_queue_depth gauge
+                notifications_queue_depth{channel="sms",status="pending"} 1250
+
 components:
   parameters:
     IdempotencyKey:

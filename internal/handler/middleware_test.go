@@ -44,7 +44,7 @@ func TestRequestLogger_LogsEveryRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			router := NewRouter(newBufferLogger(&buf), fakePinger{}, nil)
+			router := NewRouter(newBufferLogger(&buf), fakePinger{}, nil, nil)
 
 			req := httptest.NewRequestWithContext(t.Context(), tt.method, tt.path, nil)
 			router.ServeHTTP(httptest.NewRecorder(), req)
@@ -137,7 +137,7 @@ func TestRouter_LogsCorrelationID(t *testing.T) {
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/health", nil)
 	req.Header.Set(headerCorrelationID, "shop-req-42")
 	rec := httptest.NewRecorder()
-	NewRouter(logger, fakePinger{}, nil).ServeHTTP(rec, req)
+	NewRouter(logger, fakePinger{}, nil, nil).ServeHTTP(rec, req)
 
 	if line := decodeLogLine(t, &buf); line["correlation_id"] != "shop-req-42" {
 		t.Errorf("log correlation_id = %v, want shop-req-42", line["correlation_id"])

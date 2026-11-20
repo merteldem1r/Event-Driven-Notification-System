@@ -342,3 +342,12 @@ func (f ListFilter) Validate() error {
 	}
 	return nil
 }
+
+// QueueStat is the size of one part of the queue: the notifications of one channel in one
+// status, for metrics.
+type QueueStat struct {
+	Channel   Channel
+	Status    Status
+	Count     int64
+	OldestDue time.Duration // pending only: how long the oldest due one has waited; 0 if none is due
+}

@@ -1044,3 +1044,42 @@ func TestRecoverExpired(t *testing.T) {
 		t.Errorf("old worker's MarkSent = %v, %v; want refused", ok, err)
 	}
 }
+
+// Counts per channel and status; the oldest age only counts notifications that are due.
+func TestQueueStats(t *testing.T) {
+	if _, err := testDB.Exec(t.Context(), `UPDATE notifications SET status = 'cancelled' WHERE status IN ('pending', 'processing')`); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	insertQueuedOn(t, domain.ChannelSMS, domain.PriorityHigh, now.Add(-90*time.Second), domain.StatusPending) // due 90 s ago
+	insertQueuedOn(t, domain.ChannelSMS, domain.PriorityLow, now.Add(-time.Second), domain.StatusPending)
+	insertQueuedOn(t, domain.ChannelSMS, domain.PriorityLow, now.Add(-time.Hour), domain.StatusProcessing)
+	insertQueuedOn(t, domain.ChannelEmail, domain.PriorityNormal, now.Add(time.Minute), domain.StatusPending) // waiting for a retry
+	insertQueuedOn(t, domain.ChannelPush, domain.PriorityNormal, now.Add(-time.Hour), domain.StatusSent)      // not in the queue
+
+	stats, err := NewNotifications(testDB).QueueStats(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	type key struct {
+		ch domain.Channel
+		st domain.Status
+	}
+	got := map[key]domain.QueueStat{}
+	for _, s := range stats {
+		got[key{s.Channel, s.Status}] = s
+	}
+	if len(got) != 3 {
+		t.Errorf("stats = %+v, want sms pending, sms processing and email pending", stats)
+	}
+	sms := got[key{domain.ChannelSMS, domain.StatusPending}]
+	if sms.Count != 2 || sms.OldestDue < 85*time.Second || sms.OldestDue > 95*time.Second {
+		t.Errorf("sms pending = %+v, want 2, oldest about 90s", sms)
+	}
+	if p := got[key{domain.ChannelSMS, domain.StatusProcessing}]; p.Count != 1 || p.OldestDue != 0 {
+		t.Errorf("sms processing = %+v, want 1", p)
+	}
+	if e := got[key{domain.ChannelEmail, domain.StatusPending}]; e.Count != 1 || e.OldestDue != 0 {
+		t.Errorf("email pending = %+v, want 1, none due yet", e)
+	}
+}
