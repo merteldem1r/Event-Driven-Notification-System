@@ -530,8 +530,15 @@ histograms**; and **HTTP request metrics** labelled with chi's route pattern, so
 Details: each program uses its own registry instead of the library's global one (no globals,
 fresh in tests). The queue query has a 2 s limit; if it fails, the rest of `/metrics` is still
 served and the error is logged. With several API instances each reports the same queue
-numbers, so dashboards read them with `max`. The API serves its metrics in 9.1, the worker in
-9.2.
+numbers, so dashboards read them with `max`.
+
+The worker has its own small HTTP server (`WORKER_HTTP_PORT`, 8081) with `/metrics` and
+`/health`. Its `/health` checks PostgreSQL and Redis, the two things it can't work without (D16);
+the API's checks only PostgreSQL. All series start at 0 for every channel and result. A provider
+call cut off by shutdown is counted as `interrupted` but left out of the provider-time
+histogram, since it says nothing about the provider's speed. End-to-end time is measured from
+`created_at` (the database's clock) to the worker's clock at the send; the small difference
+between the two clocks doesn't matter at these scales.
 
 ---
 

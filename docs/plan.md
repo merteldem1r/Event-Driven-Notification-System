@@ -9,7 +9,7 @@ is tested. Then we stop, explain it, and the user commits it.
 
 Status: `[x]` done, `[ ]` not done. The next step is marked **(next)**.
 
-> **Current position:** Phase 9, step **9.2** (worker `/metrics` and `/health`).
+> **Current position:** Phase 15, step **15.2** (README).
 
 ---
 
@@ -101,9 +101,12 @@ asking for it.
 **Order after Phase 8:** Phase 9 (required metrics and worker health), then the README and Swagger UI
 (15.2, 15.3), then at most one optional feature (scheduled notifications is the cheapest).
 
-## Phase 9 · Observability
+## Phase 9 · Observability (done)
 - [x] 9.1 API metrics (D20): `GET /metrics` (`internal/metrics`, own registry): `notifications_queue_depth{channel,status}` and `notifications_queue_oldest_due_seconds{channel}` counted in the database on each scrape (`repository.QueueStats`); `http_requests_total` and `http_request_duration_seconds` per route pattern; Go runtime metrics; documented in OpenAPI (OBS-1)
-- [ ] 9.2 Worker HTTP server: `/metrics` with `notifications_send_total{channel,result}`, provider-call and end-to-end latency histograms, recovered leases (D20); `/health` checking PostgreSQL and Redis (D16) (OBS-1, OBS-4) **(next)**
+- [x] 9.2 Worker HTTP server (`WORKER_HTTP_PORT`, 8081; Compose publishes 8081-8089 for scaled workers): `/metrics` with `notifications_send_total{channel,result}`, `notifications_provider_request_duration_seconds`, `notifications_delivery_duration_seconds`, `notifications_leases_recovered_total` (D20, `metrics.Sends`); `/health` checking PostgreSQL and Redis, 503 naming the one that is down (D16) (OBS-1, OBS-4)
+
+**Verify:** `curl localhost:8080/metrics` (queue, requests) and `curl localhost:8081/metrics` (sends); `docker compose stop redis` turns `curl localhost:8081/health` into 503 with `"redis":"unreachable"`.
+**Summary:** `docs/application/10-observability.md`.
 - [x] 9.3 Correlation ID carried into worker logs (OBS-2, OBS-3); done early in 6.2
 
 ## Phase 10–14 · Optional features
@@ -115,5 +118,5 @@ asking for it.
 
 ## Phase 15 · Proof and polish
 - [x] 15.1 Load test: burst proves the 100/s cap holds (IMP-9); done early in 7.4
-- [ ] 15.2 Final README: setup, architecture, API examples (DEL-2)
+- [ ] 15.2 Final README: setup, architecture, API examples (DEL-2) **(next)**
 - [ ] 15.3 OpenAPI complete + Swagger UI (DEL-4)

@@ -47,10 +47,10 @@ Status values: **Done**, **Partial**, **Todo**.
 
 | ID | Requirement | Status | Phase | Notes |
 |---|---|---|---|---|
-| OBS-1 | Real-time metrics endpoint: queue depth, success/failure rates, latency | Partial | 9 | API `GET /metrics` (D20): queue depth and oldest due age per channel, HTTP request count and latency (done); send results and send latency on the worker in 9.2 |
-| OBS-2 | Structured logging | Partial | 2, 9 | JSON logs via `slog` in the API and the worker (done); one log line per HTTP request (done); worker logs one line per send result (IDs, channel, attempt, duration; never content or recipient); an outage of Redis or the database logs one line when it starts and one when it ends, not every retry |
+| OBS-1 | Real-time metrics endpoint: queue depth, success/failure rates, latency | Done | 9 | Prometheus (D20). API `GET /metrics`: queue depth and oldest due age per channel, HTTP request count and latency. Worker `GET :8081/metrics`: send results per channel (`sent`, `retry`, `failed`, `interrupted`), provider-call and end-to-end latency, recovered leases |
+| OBS-2 | Structured logging | Done | 2, 9 | JSON logs via `slog` in the API and the worker (done); one log line per HTTP request (done); worker logs one line per send result (IDs, channel, attempt, duration; never content or recipient); an outage of Redis or the database logs one line when it starts and one when it ends, not every retry |
 | OBS-3 | Correlation IDs in logs, carried from API to worker | Done | 4, 6 | API side (D13): `X-Correlation-ID`, on every API log line, stored on the notification; the worker puts it on its log lines for that notification (6.2) |
-| OBS-4 | Health check endpoint | Partial | 2, 3, 9 | API `GET /health` checks PostgreSQL, 200/503 (done); the API doesn't use Redis, so the Redis check goes on the worker's health endpoint in Phase 9 (D16) |
+| OBS-4 | Health check endpoint | Done | 2, 3, 9 | API `GET /health` checks PostgreSQL; worker `GET :8081/health` checks PostgreSQL and Redis (D16); 200, or 503 naming what is unreachable |
 
 ## 5. External Provider Integration
 
