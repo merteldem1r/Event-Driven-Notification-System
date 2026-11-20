@@ -27,7 +27,7 @@ Status values: **Done**, **Partial**, **Todo**.
 | ID | Requirement | Status | Phase | Notes |
 |---|---|---|---|---|
 | PROC-1 | Process notifications asynchronously via queue workers | Done | 6 | Worker loops claim with `FOR UPDATE SKIP LOCKED`, send, record the result |
-| PROC-2 | Rate limiting: max 100 messages/second **per channel** | Todo | 7 | Shared across all workers (Redis) |
+| PROC-2 | Rate limiting: max 100 messages/second **per channel** | Partial | 7 | Shared Redis limiter built and tested (D15, 7.1); the worker uses it in 7.2 |
 | PROC-3 | Priority queue support (high, normal, low) | Done | 6 | Weighted 6:3:1 with fallback (D7) |
 | PROC-4 | Content validation (character limits, required fields) | Done | 4 | D4: SMS 1,600, push 500, email 100,000 characters; recipient format per channel; all field errors returned as `400 validation_failed` |
 | PROC-5 | Idempotency support to prevent duplicate sends | Partial | 4, 8 | API level done for single and batch creates (D12: `Idempotency-Key` header, race-free via unique index); worker level (lease + dedup key) in Phase 8 |
@@ -49,7 +49,7 @@ Status values: **Done**, **Partial**, **Todo**.
 |---|---|---|---|---|
 | OBS-1 | Real-time metrics endpoint: queue depth, success/failure rates, latency | Todo | 9 | Prometheus `/metrics` |
 | OBS-2 | Structured logging | Partial | 2, 9 | JSON logs via `slog` in the API and the worker (done); one log line per HTTP request (done); worker logs one line per send result (IDs, channel, attempt, duration; never content or recipient) |
-| OBS-3 | Correlation IDs in logs, carried from API to worker | Partial | 4, 9 | API side done (D13): `X-Correlation-ID`, on every API log line, stored on the notification; the worker puts it on its log lines for that notification (6.2) |
+| OBS-3 | Correlation IDs in logs, carried from API to worker | Done | 4, 6 | API side (D13): `X-Correlation-ID`, on every API log line, stored on the notification; the worker puts it on its log lines for that notification (6.2) |
 | OBS-4 | Health check endpoint | Partial | 2, 3 | `GET /health` checks PostgreSQL, 200/503 (done); Redis check in Phase 7 |
 
 ## 5. External Provider Integration
@@ -78,7 +78,7 @@ Status values: **Done**, **Partial**, **Todo**.
 | DEL-1 | Repository with clean commit history | Partial | all | Conventional Commits enforced by hook + CI (done); ongoing |
 | DEL-2 | README.md: setup, architecture overview, API examples | Todo | 15 | |
 | DEL-3 | Docker Compose: one-command setup (`docker compose up`) | Done | 2, 6 | api, worker, migrations, PostgreSQL, Redis; the worker needs `PROVIDER_URL` (shell or `.env`) |
-| DEL-4 | API documentation: Swagger/OpenAPI specification | Partial | 4–15 | `docs/openapi.yaml` (OpenAPI 3.0.3) covers create, get and health; tests keep it in sync with the router and real responses; grows with each endpoint; Swagger UI in Phase 15 |
+| DEL-4 | API documentation: Swagger/OpenAPI specification | Partial | 4–15 | `docs/openapi.yaml` (OpenAPI 3.0.3) covers every endpoint so far (create, batch, get, list, batch status, both cancels, health); tests keep it in sync with the router and real responses; grows with each endpoint; Swagger UI in Phase 15 |
 | DEL-5 | Database migrations: versioned schema changes | Done | 3 | golang-migrate, numbered up/down SQL files, applied automatically by Compose; new migrations added as features need them |
 | DEL-6 | Test suite runnable with a single command | Partial | all | `make test` (race detector) and `make check` (done); repository tests use testcontainers and need Docker; grows with each step |
 
@@ -86,11 +86,11 @@ Status values: **Done**, **Partial**, **Todo**.
 
 | ID | Requirement | Status | Phase | Notes |
 |---|---|---|---|---|
-| IMP-1 | The rate limit holds across **all** worker processes, not per worker | Todo | 7 | |
+| IMP-1 | The rate limit holds across **all** worker processes, not per worker | Partial | 7 | One Redis key per channel; tested with two limiters on separate clients: 109 to 110 sends per second together (7.1); full test with worker processes in 7.3 |
 | IMP-2 | Two workers never claim the same notification | Done | 6 | `SKIP LOCKED`; tested with 20 concurrent claimers and with two worker processes |
 | IMP-3 | Saving and enqueuing are atomic (no dual-write problem) | Done | 3, 5 | One table: inserting a row is enqueuing it; a batch is one statement, so all or none of it is saved |
 | IMP-4 | Cancel and worker claim can't both win (no race) | Done | 5 | One conditional `UPDATE`; race tested against a simulated claim |
-| IMP-5 | Graceful shutdown of API and workers (finish in-flight work on SIGTERM) | Partial | 2, 8 | API (done); worker pending |
+| IMP-5 | Graceful shutdown of API and workers (finish in-flight work on SIGTERM) | Done | 2, 6 | API (2.1); worker (6.1, 6.4): stops claiming, finishes in-flight sends within `WORKER_SHUTDOWN_TIMEOUT`, puts cut-off sends back in the queue |
 | IMP-6 | Low-priority messages are not starved forever | Done | 6 | 1 in 10 claims prefers `low` (D7) |
 | IMP-7 | Config only via environment variables; invalid config fails at startup | Done | 2 | `internal/config` |
 | IMP-8 | Batch of 1000 is inserted efficiently (one transaction, bulk insert) | Done | 5 | One `INSERT ... SELECT FROM unnest(...)` statement; 1,000 rows in about 50 ms in tests |

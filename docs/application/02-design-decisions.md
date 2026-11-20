@@ -24,6 +24,7 @@
 | D12 | Idempotency key behavior | Phase 4 (create API) | Decided: see D12 below |
 | D13 | Correlation ID header and client IDs | Phase 4 (create API) | Decided: `X-Correlation-ID`, accept safe client IDs |
 | D14 | Cancel API | Phase 5 (cancel) | Decided: `POST .../{id}/cancel`, `409` when too late, repeat is `200` |
+| D15 | Rate limiter details: algorithm, burst, Redis down | Phase 7 (rate limiting) | Decided: GCRA via `redis_rate`, burst 10, fail closed |
 
 **Why only D1–D3 now?** They decide *what the database schema looks like, how workers are
 written, and what runs in docker-compose*. Changing them later means rewriting a lot.
@@ -311,6 +312,28 @@ handled in Phase 8.
 
 ---
 
+## D15 — Rate limiter details
+
+D2 put the limiter in Redis. Three things were left open:
+
+- **Library or own script.** `go-redis/redis_rate` runs the GCRA algorithm as one Lua script,
+  so the check and the update are atomic in Redis. Our own token-bucket script would do the same
+  with more code to maintain and explain.
+- **Burst.** How many sends may go at once after a quiet moment. A burst of 100 sends 100 at
+  once, then 1 every 10 ms; a burst of 1 spaces every send exactly 10 ms apart, so loops wait
+  even when the system is idle.
+- **Redis down.** Fail closed (don't send until Redis answers) or fail open (send without a
+  limit).
+
+Chosen: **`redis_rate` (GCRA), burst 10, fail closed.** Redis stores one number per channel
+(key `rate:channel:<channel>`): the time at which the channel will be "caught up". Each send
+pushes it 10 ms further; a send is allowed while it is at most burst x 10 ms = 100 ms in the
+future. The time comes from Redis's own clock, so worker clocks don't matter. In any one second
+at most 100 + 10 sends go out. Measured with two limiters on separate clients (two processes),
+20 loops each, over one second: 109 to 110 sends in total.
+
+---
+
 ## Resulting architecture
 
 ```
@@ -349,4 +372,5 @@ handled in Phase 8.
 | D13 | Correlation ID | **`X-Correlation-ID` header**; a client ID of 1 to 128 characters `[A-Za-z0-9._:-]` is kept, anything else (missing, unsafe, too long) is replaced by a new UUID, never rejected; returned on every response, added to every log line through a slog handler wrapper, stored on the notification for the worker | One search finds every log line of a request, later across API and worker; the client's own ID links our logs to theirs; validation keeps log lines clean | W3C `traceparent` (comes with tracing, Phase 13) | 2026-11-20 |
 | D14 | Cancel | **`POST /api/v1/notifications/{id}/cancel`** → `200` with the notification; one conditional `UPDATE ... WHERE id = $1 AND status = 'pending'`; past pending → **`409 not_cancellable`** naming the status; already cancelled → **`200`** (safe to retry); the row is kept as `cancelled`; **batch cancel** `POST /api/v1/batches/{id}/cancel` cancels what is still pending and returns `cancelled` plus the counts, `0` is not an error | The check and the change are one statement, so cancel and a worker claim can't both win (tested: 200 races, and 50 over HTTP); an explicit action URL, since nothing is deleted; clients learn why a cancel came too late | Cancelling a notification that is already with the provider | 2026-11-20 |
 | D7 | Priority | **Weighted 6:3:1** with fallback: of every 10 claims 6 prefer `high`, 3 `normal`, 1 `low`; an empty preferred queue falls back to the others (high to low); claims use `FOR UPDATE SKIP LOCKED` per priority | `low` always moves (IMP-6); simple, predictable rule; full capacity is used whatever is waiting; weights are easy to tune | During a `high` burst, `high` gets ~60% of throughput instead of 100% | 2026-11-20 |
+| D15 | Rate limiter details | **`go-redis/redis_rate` (GCRA in one Lua script), one key per channel, 100/s with burst 10, fail closed**; `Wait` sleeps for the time Redis says the next slot opens, then asks again; settings `RATE_LIMIT_PER_SECOND`, `RATE_LIMIT_BURST` | Atomic and correct across processes; Redis's clock, not the workers'; a small burst keeps every one-second window near 100 while idle loops don't wait; never exceeding the provider's limit matters more than sending during a Redis outage | Own algorithm code; sending while Redis is down; up to 10 extra sends in the first second after a quiet moment | 2026-11-20 |
 | D9 | Provider | **webhook.site only, for now**: the worker sends to `PROVIDER_URL` (your own webhook.site URL, set to answer `202 {messageId, status, timestamp}`); an own local fake provider is noted in the plan as an optional later step | Exactly the integration the requirements ask for; less code now; every send is visible in the browser | Offline runs; load tests beyond webhook.site's free request limit; a provider that fails or slows down on purpose for retry tests (until the fake is added) | 2026-11-20 |

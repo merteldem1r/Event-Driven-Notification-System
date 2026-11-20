@@ -28,6 +28,12 @@ func TestLoad(t *testing.T) {
 		if c.ProviderTimeout == 0 {
 			c.ProviderTimeout = 5 * time.Second
 		}
+		if c.RateLimitPerSecond == 0 {
+			c.RateLimitPerSecond = 100
+		}
+		if c.RateLimitBurst == 0 {
+			c.RateLimitBurst = 10
+		}
 		return c
 	}
 
@@ -57,6 +63,7 @@ func TestLoad(t *testing.T) {
 				HTTPPort: 8080, LogLevel: slog.LevelInfo, DatabaseURL: dbURL,
 				WorkerConcurrency: 5, WorkerPollInterval: 2 * time.Second, WorkerShutdownTimeout: time.Minute,
 				WorkerLeaseDuration: 2 * time.Minute, ProviderTimeout: 5 * time.Second,
+				RateLimitPerSecond: 100, RateLimitBurst: 10,
 			},
 		},
 		{
@@ -78,6 +85,47 @@ func TestLoad(t *testing.T) {
 			name:    "provider url with another scheme",
 			env:     map[string]string{"DATABASE_URL": dbURL, "PROVIDER_URL": "ftp://example.com/x"},
 			wantErr: "PROVIDER_URL must be a full http(s) URL",
+		},
+		{
+			name: "rate limit settings",
+			env: map[string]string{
+				"DATABASE_URL": dbURL, "REDIS_URL": "redis://localhost:6379/0",
+				"RATE_LIMIT_PER_SECOND": "50", "RATE_LIMIT_BURST": "50",
+			},
+			want: withDefaults(Config{
+				HTTPPort: 8080, LogLevel: slog.LevelInfo, DatabaseURL: dbURL,
+				RedisURL: "redis://localhost:6379/0", RateLimitPerSecond: 50, RateLimitBurst: 50,
+			}),
+		},
+		{
+			name:    "redis url without scheme",
+			env:     map[string]string{"DATABASE_URL": dbURL, "REDIS_URL": "localhost:6379"},
+			wantErr: "REDIS_URL must be a full redis:// URL",
+		},
+		{
+			name:    "redis url with another scheme",
+			env:     map[string]string{"DATABASE_URL": dbURL, "REDIS_URL": "http://localhost:6379"},
+			wantErr: "REDIS_URL must be a full redis:// URL",
+		},
+		{
+			name:    "rate limit 0",
+			env:     map[string]string{"DATABASE_URL": dbURL, "RATE_LIMIT_PER_SECOND": "0"},
+			wantErr: "RATE_LIMIT_PER_SECOND must be a number from 1 to 100000",
+		},
+		{
+			name:    "rate limit not a number",
+			env:     map[string]string{"DATABASE_URL": dbURL, "RATE_LIMIT_PER_SECOND": "fast"},
+			wantErr: "RATE_LIMIT_PER_SECOND must be",
+		},
+		{
+			name:    "burst 0",
+			env:     map[string]string{"DATABASE_URL": dbURL, "RATE_LIMIT_BURST": "0"},
+			wantErr: "RATE_LIMIT_BURST must be a number from 1 to RATE_LIMIT_PER_SECOND",
+		},
+		{
+			name:    "burst above the rate",
+			env:     map[string]string{"DATABASE_URL": dbURL, "RATE_LIMIT_PER_SECOND": "100", "RATE_LIMIT_BURST": "101"},
+			wantErr: "RATE_LIMIT_BURST must be",
 		},
 		{
 			name: "lease not longer than provider timeout",
@@ -135,6 +183,7 @@ func TestLoad(t *testing.T) {
 				"HTTP_PORT", "LOG_LEVEL", "DATABASE_URL",
 				"WORKER_CONCURRENCY", "WORKER_POLL_INTERVAL", "WORKER_SHUTDOWN_TIMEOUT", "WORKER_LEASE_DURATION",
 				"PROVIDER_URL", "PROVIDER_TIMEOUT",
+				"REDIS_URL", "RATE_LIMIT_PER_SECOND", "RATE_LIMIT_BURST",
 			} {
 				t.Setenv(key, "")
 			}

@@ -27,10 +27,17 @@ type Config struct {
 
 	ProviderURL     string        // where the worker sends notifications (D9: webhook.site); empty if unset
 	ProviderTimeout time.Duration // limit for one send
+
+	RedisURL           string // Redis for the shared rate limiter; empty if unset
+	RateLimitPerSecond int    // sends per second per channel, for all workers together
+	RateLimitBurst     int    // sends allowed at once after an idle moment
 }
 
 // MaxWorkerConcurrency caps WORKER_CONCURRENCY; more loops than this only add database load.
 const MaxWorkerConcurrency = 1000
+
+// MaxRateLimitPerSecond caps RATE_LIMIT_PER_SECOND, a sanity bound well above the required 100.
+const MaxRateLimitPerSecond = 100000
 
 // LoadDotEnv loads variables from a local env file if it exists.
 // Variables that are already set are not overwritten.
@@ -93,11 +100,29 @@ func Load() (Config, error) {
 		return Config{}, errors.New("WORKER_LEASE_DURATION must be longer than PROVIDER_TIMEOUT")
 	}
 
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL != "" {
+		u, err := url.Parse(redisURL)
+		if err != nil || (u.Scheme != "redis" && u.Scheme != "rediss") || u.Host == "" {
+			return Config{}, errors.New("REDIS_URL must be a full redis:// URL, e.g. redis://localhost:6379/0")
+		}
+	}
+	perSecond, err := strconv.Atoi(getEnv("RATE_LIMIT_PER_SECOND", "100"))
+	if err != nil || perSecond < 1 || perSecond > MaxRateLimitPerSecond {
+		return Config{}, fmt.Errorf("RATE_LIMIT_PER_SECOND must be a number from 1 to %d", MaxRateLimitPerSecond)
+	}
+	// A burst above the rate would let more than the rate through in one second.
+	burst, err := strconv.Atoi(getEnv("RATE_LIMIT_BURST", "10"))
+	if err != nil || burst < 1 || burst > perSecond {
+		return Config{}, errors.New("RATE_LIMIT_BURST must be a number from 1 to RATE_LIMIT_PER_SECOND")
+	}
+
 	return Config{
 		HTTPPort: port, LogLevel: level, DatabaseURL: dbURL,
 		WorkerConcurrency: concurrency, WorkerPollInterval: poll, WorkerShutdownTimeout: shutdown,
 		WorkerLeaseDuration: lease,
 		ProviderURL:         providerURL, ProviderTimeout: providerTimeout,
+		RedisURL: redisURL, RateLimitPerSecond: perSecond, RateLimitBurst: burst,
 	}, nil
 }
 

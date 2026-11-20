@@ -1,4 +1,4 @@
-// Package database sets up the PostgreSQL connection pool.
+// Package database sets up the connections to PostgreSQL and Redis.
 package database
 
 import (
