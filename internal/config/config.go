@@ -24,6 +24,7 @@ type Config struct {
 	WorkerPollInterval    time.Duration // idle wait before checking the queue again
 	WorkerShutdownTimeout time.Duration // time in-flight work gets after a stop signal
 	WorkerLeaseDuration   time.Duration // how long a claimed notification belongs to its worker
+	WorkerRecoverInterval time.Duration // how often expired leases are taken back (RET-5)
 
 	ProviderURL     string        // where the worker sends notifications (D9: webhook.site); empty if unset
 	ProviderTimeout time.Duration // limit for one send
@@ -87,7 +88,11 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
-	lease, err := positiveDuration("WORKER_LEASE_DURATION", "60s") // final number is D8
+	lease, err := positiveDuration("WORKER_LEASE_DURATION", "60s") // D8
+	if err != nil {
+		return Config{}, err
+	}
+	recoverEvery, err := positiveDuration("WORKER_RECOVER_INTERVAL", "10s")
 	if err != nil {
 		return Config{}, err
 	}
@@ -144,8 +149,8 @@ func Load() (Config, error) {
 	return Config{
 		HTTPPort: port, LogLevel: level, DatabaseURL: dbURL,
 		WorkerConcurrency: concurrency, WorkerPollInterval: poll, WorkerShutdownTimeout: shutdown,
-		WorkerLeaseDuration: lease,
-		ProviderURL:         providerURL, ProviderTimeout: providerTimeout,
+		WorkerLeaseDuration: lease, WorkerRecoverInterval: recoverEvery,
+		ProviderURL: providerURL, ProviderTimeout: providerTimeout,
 		RetryMaxAttempts: maxAttempts, RetryBaseDelay: retryBase, RetryMaxDelay: retryMax,
 		RedisURL: redisURL, RateLimitPerSecond: perSecond, RateLimitBurst: burst,
 	}, nil

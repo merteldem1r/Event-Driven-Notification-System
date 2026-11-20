@@ -1010,3 +1010,37 @@ func TestRecordResults(t *testing.T) {
 		}
 	})
 }
+
+// A notification whose worker stopped is taken back once its lease has expired, not before,
+// and the stopped worker can no longer record a result for it (RET-5).
+func TestRecoverExpired(t *testing.T) {
+	repo := NewNotifications(testDB)
+	n := claimOne(t) // leased for a minute
+
+	if count, err := repo.RecoverExpired(t.Context()); err != nil || count != 0 {
+		t.Fatalf("RecoverExpired with a live lease = %d, %v; want 0", count, err)
+	}
+
+	// The worker "crashes": its lease runs out.
+	if _, err := testDB.Exec(t.Context(), `UPDATE notifications SET locked_until = now() - interval '1 second' WHERE id = $1`, n.ID); err != nil {
+		t.Fatal(err)
+	}
+	if count, err := repo.RecoverExpired(t.Context()); err != nil || count != 1 {
+		t.Fatalf("RecoverExpired = %d, %v; want 1", count, err)
+	}
+	got, _ := repo.GetByID(t.Context(), n.ID)
+	if got.Status != domain.StatusPending || got.Attempts != 1 || got.LastError == nil ||
+		*got.LastError != leaseExpiredError || leaseOf(t, n.ID) != nil {
+		t.Errorf("after recovery: %+v; want pending, attempt 1 kept, the lease error, no lease", got)
+	}
+
+	// Due at once: the next claim is attempt 2, and the old worker's late result is refused.
+	again, ok, err := repo.ClaimNext(t.Context(), domain.ChannelSMS, domain.PriorityNormal, time.Minute)
+	if err != nil || !ok || again.ID != n.ID || again.Attempts != 2 {
+		t.Fatalf("claim after recovery = %s (attempt %d), %v, %v; want the same notification, attempt 2",
+			again.ID, again.Attempts, ok, err)
+	}
+	if ok, err := repo.MarkSent(t.Context(), n.ID, n.Attempts, "late"); err != nil || ok {
+		t.Errorf("old worker's MarkSent = %v, %v; want refused", ok, err)
+	}
+}

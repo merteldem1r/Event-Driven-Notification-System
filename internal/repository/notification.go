@@ -201,6 +201,24 @@ func (r *Notifications) MarkFailed(ctx context.Context, id uuid.UUID, attempt in
 	return r.finish(ctx, id, attempt, `status = 'failed', last_error = $3`, lastError)
 }
 
+// leaseExpiredError is the last_error of a notification taken back from a stopped worker.
+const leaseExpiredError = "lease expired: the worker stopped before recording a result"
+
+// RecoverExpired puts notifications whose lease has expired back in the queue, due at once,
+// and returns how many. Their worker stopped (crashed, killed) without recording a result (RET-5).
+// The attempt still counts: the provider may have received the message. If that worker is
+// only slow, its result is not recorded later, since finish checks the status and attempt.
+func (r *Notifications) RecoverExpired(ctx context.Context) (int64, error) {
+	tag, err := r.db.Exec(ctx, `
+		UPDATE notifications
+		SET status = 'pending', locked_until = NULL, last_error = $1, updated_at = now()
+		WHERE status = 'processing' AND locked_until < now()`, leaseExpiredError)
+	if err != nil {
+		return 0, fmt.Errorf("recover expired leases: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 // Retry puts a notification back in the queue to be tried again after delay, keeping the error.
 // The attempt counts. The delay is added to the database's clock, like the lease.
 func (r *Notifications) Retry(ctx context.Context, id uuid.UUID, attempt int, lastError string, delay time.Duration) (ok bool, _ error) {

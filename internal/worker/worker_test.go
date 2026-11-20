@@ -15,7 +15,10 @@ import (
 // These tests run in a synctest bubble: time is virtual, so a 25 s shutdown timeout takes no
 // real time, and synctest.Wait returns once every goroutine is blocked, making timing exact.
 
-var testConfig = Config{Concurrency: 1, PollInterval: 500 * time.Millisecond, ShutdownTimeout: 25 * time.Second}
+var testConfig = Config{
+	Concurrency: 1, PollInterval: 500 * time.Millisecond, ShutdownTimeout: 25 * time.Second,
+	RecoverInterval: 10 * time.Second,
+}
 
 // fakeProcessor hands out `queue` notifications. If block is set, each call waits for it to be
 // closed (or for its context to end), like a slow provider call.
@@ -107,7 +110,7 @@ func (f *fakeProcessor) snapshot() (calls, processed int, cancelled bool) {
 func start(proc Processor, cfg Config) (context.CancelFunc, <-chan error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- New([]Processor{proc}, cfg, slog.New(slog.DiscardHandler)).Run(ctx) }()
+	go func() { done <- New([]Processor{proc}, nil, cfg, slog.New(slog.DiscardHandler)).Run(ctx) }()
 	return cancel, done
 }
 
@@ -157,7 +160,7 @@ func TestRun_EachProcessorHasItsOwnLoops(t *testing.T) {
 		cfg.Concurrency = 2
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan error, 1)
-		go func() { done <- New([]Processor{stuck, free}, cfg, slog.New(slog.DiscardHandler)).Run(ctx) }()
+		go func() { done <- New([]Processor{stuck, free}, nil, cfg, slog.New(slog.DiscardHandler)).Run(ctx) }()
 
 		synctest.Wait()
 		if calls, _, _ := stuck.snapshot(); calls != 2 {
@@ -184,7 +187,7 @@ func TestRun_LogsAnOutageOnceNotEveryRetry(t *testing.T) {
 		cfg.Concurrency = 3
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan error, 1)
-		go func() { done <- New([]Processor{proc}, cfg, slog.New(slog.NewJSONHandler(&logs, nil))).Run(ctx) }()
+		go func() { done <- New([]Processor{proc}, nil, cfg, slog.New(slog.NewJSONHandler(&logs, nil))).Run(ctx) }()
 
 		time.Sleep(10 * cfg.PollInterval) // 3 loops retry about 10 times each
 		synctest.Wait()
@@ -226,7 +229,7 @@ func TestRun_EmptyQueueDoesNotEndAnOutage(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan error, 1)
 		go func() {
-			done <- New([]Processor{failing, idle}, cfg, slog.New(slog.NewJSONHandler(&logs, nil))).Run(ctx)
+			done <- New([]Processor{failing, idle}, nil, cfg, slog.New(slog.NewJSONHandler(&logs, nil))).Run(ctx)
 		}()
 
 		time.Sleep(5 * cfg.PollInterval)
@@ -331,6 +334,81 @@ func TestRun_WaitsAfterAnError(t *testing.T) {
 		synctest.Wait()
 		if calls, _, _ := proc.snapshot(); calls != 2 {
 			t.Errorf("calls = %d, want 2: one retry per interval, not a tight loop", calls)
+		}
+	})
+}
+
+// fakeLeases counts sweeps and answers each with count and err.
+type fakeLeases struct {
+	mu     sync.Mutex
+	sweeps int
+	count  int64
+	err    error
+}
+
+func (l *fakeLeases) RecoverExpired(context.Context) (int64, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.sweeps++
+	return l.count, l.err
+}
+
+func (l *fakeLeases) sweepCount() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.sweeps
+}
+
+// The sweep runs every RecoverInterval and ends with the stop signal (RET-5).
+func TestRun_SweepsExpiredLeases(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		leases := &fakeLeases{count: 2}
+		var logs syncBuffer
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() {
+			done <- New([]Processor{&fakeProcessor{}}, leases, testConfig, slog.New(slog.NewJSONHandler(&logs, nil))).Run(ctx)
+		}()
+
+		time.Sleep(3*testConfig.RecoverInterval + time.Second)
+		synctest.Wait()
+		if got := leases.sweepCount(); got != 3 {
+			t.Errorf("%d sweeps in 31s, want 3 (every 10s)", got)
+		}
+		if got := logs.lines(t, "took back notifications whose worker stopped without a result"); len(got) != 3 {
+			t.Errorf("%d recovery lines, want 3", len(got))
+		}
+
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatalf("Run = %v, want nil", err)
+		}
+		time.Sleep(testConfig.RecoverInterval)
+		if got := leases.sweepCount(); got != 3 {
+			t.Errorf("%d sweeps after stop, want still 3", got)
+		}
+	})
+}
+
+// A failing sweep (database down) is part of the outage: logged once, not every 10 s.
+func TestRun_SweepErrorsAreLoggedOnce(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		leases := &fakeLeases{err: errors.New("database down")}
+		var logs syncBuffer
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() {
+			done <- New([]Processor{&fakeProcessor{}}, leases, testConfig, slog.New(slog.NewJSONHandler(&logs, nil))).Run(ctx)
+		}()
+
+		time.Sleep(5*testConfig.RecoverInterval + time.Second)
+		synctest.Wait()
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatalf("Run = %v, want nil", err)
+		}
+		if got := logs.lines(t, "recovering expired leases failed"); len(got) != 1 {
+			t.Errorf("%d error lines for 5 failed sweeps, want 1", len(got))
 		}
 	})
 }

@@ -94,10 +94,11 @@ func run() error {
 	}
 	slog.Info("rate limit per channel", "per_second", cfg.RateLimitPerSecond, "burst", cfg.RateLimitBurst)
 	slog.Info("retries", "max_attempts", cfg.RetryMaxAttempts, "base_delay", cfg.RetryBaseDelay.String(), "max_delay", cfg.RetryMaxDelay.String())
-	w := worker.New(dispatchers, worker.Config{
+	w := worker.New(dispatchers, queue, worker.Config{
 		Concurrency:     cfg.WorkerConcurrency,
 		PollInterval:    cfg.WorkerPollInterval,
 		ShutdownTimeout: cfg.WorkerShutdownTimeout,
+		RecoverInterval: cfg.WorkerRecoverInterval,
 	}, logger)
 	return w.Run(ctx)
 }

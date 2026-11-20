@@ -25,6 +25,9 @@ func TestLoad(t *testing.T) {
 		if c.WorkerLeaseDuration == 0 {
 			c.WorkerLeaseDuration = 60 * time.Second
 		}
+		if c.WorkerRecoverInterval == 0 {
+			c.WorkerRecoverInterval = 10 * time.Second
+		}
 		if c.ProviderTimeout == 0 {
 			c.ProviderTimeout = 5 * time.Second
 		}
@@ -71,7 +74,7 @@ func TestLoad(t *testing.T) {
 			want: Config{
 				HTTPPort: 8080, LogLevel: slog.LevelInfo, DatabaseURL: dbURL,
 				WorkerConcurrency: 5, WorkerPollInterval: 2 * time.Second, WorkerShutdownTimeout: time.Minute,
-				WorkerLeaseDuration: 2 * time.Minute, ProviderTimeout: 5 * time.Second,
+				WorkerLeaseDuration: 2 * time.Minute, WorkerRecoverInterval: 10 * time.Second, ProviderTimeout: 5 * time.Second,
 				RetryMaxAttempts: 5, RetryBaseDelay: 10 * time.Second, RetryMaxDelay: 10 * time.Minute,
 				RateLimitPerSecond: 85, RateLimitBurst: 5,
 			},
@@ -126,6 +129,11 @@ func TestLoad(t *testing.T) {
 			name:    "rate limit not a number",
 			env:     map[string]string{"DATABASE_URL": dbURL, "RATE_LIMIT_PER_SECOND": "fast"},
 			wantErr: "RATE_LIMIT_PER_SECOND must be",
+		},
+		{
+			name:    "recover interval not a duration",
+			env:     map[string]string{"DATABASE_URL": dbURL, "WORKER_RECOVER_INTERVAL": "often"},
+			wantErr: "WORKER_RECOVER_INTERVAL must be a positive duration",
 		},
 		{
 			name:    "max attempts 0",
@@ -212,6 +220,7 @@ func TestLoad(t *testing.T) {
 			for _, key := range []string{
 				"HTTP_PORT", "LOG_LEVEL", "DATABASE_URL",
 				"WORKER_CONCURRENCY", "WORKER_POLL_INTERVAL", "WORKER_SHUTDOWN_TIMEOUT", "WORKER_LEASE_DURATION",
+				"WORKER_RECOVER_INTERVAL",
 				"PROVIDER_URL", "PROVIDER_TIMEOUT", "RETRY_MAX_ATTEMPTS", "RETRY_BASE_DELAY", "RETRY_MAX_DELAY",
 				"REDIS_URL", "RATE_LIMIT_PER_SECOND", "RATE_LIMIT_BURST",
 			} {

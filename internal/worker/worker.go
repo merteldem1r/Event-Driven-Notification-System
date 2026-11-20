@@ -20,17 +20,25 @@ type Processor interface {
 	ProcessNext(ctx context.Context) (found bool, err error)
 }
 
+// Leases takes back notifications from workers that stopped without recording a result.
+type Leases interface {
+	// RecoverExpired puts notifications with an expired lease back in the queue and says how many.
+	RecoverExpired(ctx context.Context) (int64, error)
+}
+
 // Config controls the loops.
 type Config struct {
 	Concurrency     int           // loops running in parallel for each processor
 	PollInterval    time.Duration // wait after an empty queue or an error
 	ShutdownTimeout time.Duration // time in-flight work gets after Run's context is cancelled
+	RecoverInterval time.Duration // how often expired leases are looked for
 }
 
 // Worker runs Config.Concurrency loops for each processor, each loop calling its processor
 // again and again. The worker program has one processor per channel (D16).
 type Worker struct {
 	procs   []Processor
+	leases  Leases
 	cfg     Config
 	logger  *slog.Logger
 	trouble trouble
@@ -46,9 +54,10 @@ type trouble struct {
 	failures int       // failed tries since then
 }
 
-// New returns a Worker. cfg is expected to be valid (config.Load checks it).
-func New(procs []Processor, cfg Config, logger *slog.Logger) *Worker {
-	return &Worker{procs: procs, cfg: cfg, logger: logger}
+// New returns a Worker that also recovers expired leases, unless leases is nil.
+// cfg is expected to be valid (config.Load checks it).
+func New(procs []Processor, leases Leases, cfg Config, logger *slog.Logger) *Worker {
+	return &Worker{procs: procs, leases: leases, cfg: cfg, logger: logger}
 }
 
 // Run processes notifications until ctx is cancelled, then shuts down gracefully: no new
@@ -65,6 +74,9 @@ func (w *Worker) Run(ctx context.Context) error {
 			id := p*w.cfg.Concurrency + i // unique across processors, for the logs
 			wg.Go(func() { w.loop(ctx, work, proc, id) })
 		}
+	}
+	if w.leases != nil {
+		wg.Go(func() { w.sweep(ctx) })
 	}
 	w.logger.Info("worker started", "processors", len(w.procs), "loops_per_processor", w.cfg.Concurrency,
 		"poll_interval", w.cfg.PollInterval.String()) // "500ms", not nanoseconds
@@ -97,7 +109,7 @@ func (w *Worker) loop(stop, work context.Context, proc Processor, id int) {
 	for stop.Err() == nil {
 		found, err := proc.ProcessNext(work)
 		if err != nil { // e.g. database or Redis down: wait, so we don't spin
-			w.failed(work, id, "processing failed", err)
+			w.failed(work, "processing failed", err, "loop", id)
 			w.pause(stop)
 			continue
 		}
@@ -111,20 +123,46 @@ func (w *Worker) loop(stop, work context.Context, proc Processor, id int) {
 	}
 }
 
-// failed records a failed try. Only the first failure of an outage is logged as an error; the
-// retries that follow, from any loop, are logged at debug level.
-func (w *Worker) failed(ctx context.Context, id int, msg string, err error) {
+// sweep takes back expired leases every RecoverInterval until stop is cancelled. Every worker
+// process sweeps; that is harmless, since a row is taken back only once.
+func (w *Worker) sweep(stop context.Context) {
+	ticker := time.NewTicker(w.cfg.RecoverInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop.Done():
+			return
+		case <-ticker.C:
+		}
+		count, err := w.leases.RecoverExpired(stop)
+		if err != nil {
+			if stop.Err() == nil { // not just cut off by shutdown
+				w.failed(stop, "recovering expired leases failed", err, "task", "lease sweep")
+			}
+			continue
+		}
+		if count > 0 {
+			w.logger.WarnContext(stop, "took back notifications whose worker stopped without a result",
+				"count", count, "note", "they are sent again; the lease had expired")
+		}
+	}
+}
+
+// failed records a failed try; attrs say who failed. Only the first failure of an outage is
+// logged as an error; the retries that follow, from any loop, are logged at debug level.
+func (w *Worker) failed(ctx context.Context, msg string, err error, attrs ...any) {
 	t := &w.trouble
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	attrs = append(attrs, "error", err)
 	if !t.active { // the outage starts
 		t.active, t.since, t.failures = true, time.Now(), 1
-		w.logger.ErrorContext(ctx, msg, "loop", id, "error", err,
-			"retry_every", w.cfg.PollInterval.String(), "note", "retries are logged at debug level")
+		w.logger.ErrorContext(ctx, msg, append(attrs,
+			"retry_every", w.cfg.PollInterval.String(), "note", "retries are logged at debug level")...)
 		return
 	}
 	t.failures++
-	w.logger.DebugContext(ctx, msg, "loop", id, "error", err)
+	w.logger.DebugContext(ctx, msg, attrs...)
 }
 
 // succeeded records a delivered notification, which ends an outage.
