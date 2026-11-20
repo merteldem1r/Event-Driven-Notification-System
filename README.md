@@ -15,18 +15,6 @@ and sends them out at a steady, safe rate.
 
 > **Bursts come in, a steady stream goes out, and the queue absorbs the difference.**
 
-The chart shows this with 1,000 SMS arriving at once. The bars are the messages still waiting in
-the queue at the end of each second: the queue drains at a steady pace instead of overwhelming
-the provider.
-
-```mermaid
-xychart-beta
-    title "1,000 SMS arrive at once: messages waiting in the queue"
-    x-axis "Seconds" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
-    y-axis "Waiting" 0 --> 1000
-    bar [1000, 910, 825, 740, 655, 570, 485, 400, 315, 230, 145, 60, 0]
-```
-
 ## The building blocks
 
 ```mermaid
@@ -158,7 +146,8 @@ flowchart LR
     worker --> limit{{Rate limit}}
     limit --> provider[Provider]
     provider --> sent([Sent])
-    provider -. failed: try again later .-> queue
+    provider -.-> retry([Failed: try again later])
+    retry -.-> queue
 ```
 
 ### Step 1. Accept quickly
@@ -194,7 +183,7 @@ flowchart LR
     w1[Worker 1] --> redis
     w2[Worker 2] --> redis
     w3[Worker 3] --> redis
-    redis[["Redis: one slot counter<br/>per channel"]] -->|at most 85 per second<br/>per channel| provider[Provider<br/>limit: 100 per second]
+    redis[["Redis<br/>at most 85 per second<br/>per channel"]] --> provider[Provider<br/>limit: 100 per second]
 ```
 
 The service aims at 85 per second, a little below the provider's 100, because messages can
@@ -209,10 +198,10 @@ messages don't all come back at the same moment.
 
 ```mermaid
 flowchart LR
-    a1[Attempt 1] -->|wait ~10 s| a2[Attempt 2]
-    a2 -->|wait ~20 s| a3[Attempt 3]
-    a3 -->|wait ~40 s| a4[Attempt 4]
-    a4 -->|wait ~80 s| a5[Attempt 5]
+    a1[Attempt 1] --> a2[Attempt 2<br/>after ~10 s]
+    a2 --> a3[Attempt 3<br/>after ~20 s]
+    a3 --> a4[Attempt 4<br/>after ~40 s]
+    a4 --> a5[Attempt 5<br/>after ~80 s]
     a5 --> failed([Failed, with the reason])
 ```
 
@@ -375,15 +364,45 @@ never the message content.
 
 ### Configuration
 
-Every setting has a sensible default and is described in [`.env.example`](.env.example). The ones
-most worth knowing:
+Every setting is an environment variable with a sensible default; invalid values stop the
+program at startup. The most important ones, with their defaults (all of them are described in
+[`.env.example`](.env.example)):
 
-| Setting | Default | Meaning |
-|---|---|---|
-| `PROVIDER_URL` | the fake provider | Where messages are delivered |
-| `RATE_LIMIT_PER_SECOND` | 85 | Sends per second per channel, for all workers together |
-| `RETRY_MAX_ATTEMPTS` | 5 | Attempts before a notification is marked `failed` |
-| `WORKER_CONCURRENCY` | 10 | Messages each worker handles in parallel, per channel |
+```bash
+# Connections
+DATABASE_URL=postgres://notification:notification@localhost:5433/notification?sslmode=disable
+REDIS_URL=redis://localhost:6379/0          # the shared rate limiter
+HTTP_PORT=8080                              # API port
+WORKER_HTTP_PORT=8081                       # worker port for /health and /metrics
+LOG_LEVEL=info                              # debug, info, warn or error
+
+# Provider
+PROVIDER_URL=http://localhost:9090/         # where messages are delivered (the fake provider by default)
+PROVIDER_TIMEOUT=5s                         # time limit for one send
+
+# Rate limit, per channel, for all workers together
+RATE_LIMIT_PER_SECOND=85                    # steady rate, kept below the provider's 100
+RATE_LIMIT_BURST=5                          # small extra allowance after a quiet moment
+
+# Workers
+WORKER_CONCURRENCY=10                       # messages each worker sends in parallel, per channel
+WORKER_POLL_INTERVAL=500ms                  # how often an idle worker checks the queue
+WORKER_LEASE_DURATION=60s                   # after this, a crashed worker's message is taken back
+WORKER_SHUTDOWN_TIMEOUT=25s                 # on stop, time to finish sends already started
+
+# Retries
+RETRY_MAX_ATTEMPTS=5                        # attempts in total before a notification is failed
+RETRY_BASE_DELAY=10s                        # first wait, doubled after each failed attempt
+RETRY_MAX_DELAY=10m                         # the longest wait
+
+# Fake provider (local testing only)
+FAKE_PROVIDER_LATENCY=50ms                  # how long each answer takes
+FAKE_PROVIDER_FAILURE_RATE=0                # share of requests answered 503, e.g. 0.2 = 20%
+```
+
+With Docker Compose, the connections already point at the containers. The provider, rate
+limit, retry and fake provider settings can be changed in a `.env` file next to
+`docker-compose.yml`; the rest are set in `docker-compose.yml` itself.
 
 ### Project layout
 
