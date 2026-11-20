@@ -93,11 +93,20 @@ curl localhost:8080/api/v1/notifications/<id>
 Open **[localhost:8080/docs](http://localhost:8080/docs)**: interactive documentation of every
 endpoint, with a "Try it out" button that sends real requests to the running service.
 
+![Swagger UI listing every endpoint of the API](docs/assets/swagger-2.png)
+
 ### 6. Watch it work
 
 ```bash
 make logs     # follow the API, worker and fake provider logs (Ctrl+C stops following)
 ```
+
+Each program logs one JSON line per event. Below, one notification sent with
+`X-Correlation-ID: shop-req-42`: the API stores it, the worker sends it about 0.4 s later, and
+the same correlation ID appears on every line, so one request can be followed across both
+programs.
+
+![Logs of the API, worker and fake provider for one notification](docs/assets/terminal-logs.png)
 
 ### 7. Stop
 
@@ -288,6 +297,8 @@ is the end of the run. The test fails if any channel goes over 100 in any one-se
 All endpoints are under `/api/v1` and use JSON. Try them at
 [localhost:8080/docs](http://localhost:8080/docs) (Swagger UI); the specification is
 [`docs/openapi.yaml`](docs/openapi.yaml), also served at `localhost:8080/openapi.yaml`.
+
+![The API documentation page with the API's description](docs/assets/swagger-1.png)
 
 | Request | What it does |
 |---|---|
