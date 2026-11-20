@@ -56,9 +56,9 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("HTTP_PORT must be a number: %w", err)
 	}
 
-	var level slog.Level
-	if err := level.UnmarshalText([]byte(getEnv("LOG_LEVEL", "info"))); err != nil {
-		return Config{}, fmt.Errorf("LOG_LEVEL must be debug, info, warn or error: %w", err)
+	level, err := logLevel()
+	if err != nil {
+		return Config{}, err
 	}
 
 	dbURL := os.Getenv("DATABASE_URL")
@@ -133,6 +133,47 @@ func positiveDuration(key, fallback string) (time.Duration, error) {
 		return 0, fmt.Errorf("%s must be a positive duration such as 500ms or 25s", key)
 	}
 	return d, nil
+}
+
+// FakeProvider holds the settings of the local fake provider (cmd/fakeprovider, D9).
+type FakeProvider struct {
+	Port        int
+	LogLevel    slog.Level
+	Latency     time.Duration // how long each answer takes
+	FailureRate float64       // share of requests answered 503, 0 to 1
+}
+
+// MaxFakeProviderLatency caps FAKE_PROVIDER_LATENCY; slower than this only makes sends time out.
+const MaxFakeProviderLatency = time.Minute
+
+// LoadFakeProvider reads the fake provider's settings. It needs no database.
+func LoadFakeProvider() (FakeProvider, error) {
+	port, err := strconv.Atoi(getEnv("FAKE_PROVIDER_PORT", "9090"))
+	if err != nil || port < 1 || port > 65535 {
+		return FakeProvider{}, errors.New("FAKE_PROVIDER_PORT must be a port number from 1 to 65535")
+	}
+	level, err := logLevel()
+	if err != nil {
+		return FakeProvider{}, err
+	}
+	latency, err := time.ParseDuration(getEnv("FAKE_PROVIDER_LATENCY", "50ms"))
+	if err != nil || latency < 0 || latency > MaxFakeProviderLatency {
+		return FakeProvider{}, errors.New("FAKE_PROVIDER_LATENCY must be a duration from 0s to 1m, such as 50ms")
+	}
+	rate, err := strconv.ParseFloat(getEnv("FAKE_PROVIDER_FAILURE_RATE", "0"), 64)
+	if err != nil || rate < 0 || rate > 1 {
+		return FakeProvider{}, errors.New("FAKE_PROVIDER_FAILURE_RATE must be a number from 0 to 1, such as 0.1 for 10%")
+	}
+	return FakeProvider{Port: port, LogLevel: level, Latency: latency, FailureRate: rate}, nil
+}
+
+// logLevel reads LOG_LEVEL, shared by all programs.
+func logLevel() (slog.Level, error) {
+	var level slog.Level
+	if err := level.UnmarshalText([]byte(getEnv("LOG_LEVEL", "info"))); err != nil {
+		return 0, fmt.Errorf("LOG_LEVEL must be debug, info, warn or error: %w", err)
+	}
+	return level, nil
 }
 
 func getEnv(key, fallback string) string {

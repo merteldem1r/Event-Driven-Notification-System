@@ -42,7 +42,7 @@ func run() error {
 		return err
 	}
 	if cfg.ProviderURL == "" { // optional for the API, which never sends
-		return errors.New("PROVIDER_URL is required for the worker: set it to your webhook.site URL")
+		return errors.New("PROVIDER_URL is required for the worker: the fake provider (http://localhost:9090/) or your webhook.site URL")
 	}
 	if cfg.RedisURL == "" { // optional for the API, which doesn't rate limit
 		return errors.New("REDIS_URL is required for the worker: it holds the shared rate limit")

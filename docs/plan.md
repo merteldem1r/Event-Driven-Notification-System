@@ -74,7 +74,7 @@ Goal: the schema exists and Go code can read/write it, tested against a real Pos
 **Summary:** `docs/application/07-worker.md`.
 
 ## Phase 7 · Rate limiting
-- [ ] 7.0 (Optional, D9) Own local fake provider: a small HTTP server answering like webhook.site, with settings for latency and a failure rate; used when `PROVIDER_URL` is unset. Decide before 7.4, whose load test may exceed webhook.site's free request limit, and before Phase 8's failure tests
+- [x] 7.0 Own local fake provider (D9 revised): `cmd/fakeprovider` + `internal/fakeprovider`, answers like webhook.site, `FAKE_PROVIDER_LATENCY` and `FAKE_PROVIDER_FAILURE_RATE`, logs messages per channel per second; Compose service used by the worker unless `PROVIDER_URL` is set; `make run-fakeprovider` (PRV-3)
 - [x] 7.1 Redis client (`database.ConnectRedis`) + shared per-channel limiter (`internal/ratelimit`, D15: GCRA via `redis_rate`, 100/s, burst 10, fail closed); `REDIS_URL`, `RATE_LIMIT_PER_SECOND`, `RATE_LIMIT_BURST`; tests against a real Redis, including two limiters on separate clients staying at 100/s together (PROC-2, IMP-1)
 - [x] 7.2 Loops per channel (D16): claim filtered by channel on a new index `(channel, priority, next_attempt_at)` (migrations 000003, 000004); one dispatcher per channel with its own 6:3:1 pattern; worker runs `WORKER_CONCURRENCY` loops per channel (default 10); Docker image built with Go 1.26 (needed by go-redis since 7.1)
 - [x] 7.3 Each channel loop waits for a rate-limit slot before claiming (`Processor.Wait`, ended by the stop signal; error = take nothing, retry after the poll interval); worker requires `REDIS_URL` and connects at startup; Redis library logs as JSON; Compose worker gets `REDIS_URL` and waits for Redis (PROC-2)

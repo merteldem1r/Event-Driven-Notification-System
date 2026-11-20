@@ -58,7 +58,7 @@ Status values: **Done**, **Partial**, **Todo**.
 |---|---|---|---|---|
 | PRV-1 | Send `POST {to, channel, content}` to the provider (webhook.site) | Done | 6 | `internal/provider`; verified against webhook.site |
 | PRV-2 | Handle the expected `202 {messageId, status, timestamp}` response | Done | 6 | A 2xx without `messageId` is a failure; the `messageId` is stored |
-| PRV-3 | Provider behind an interface; URL from config; local mock available | Partial | 6 | `Sender` interface and `PROVIDER_URL` done; local fake provider optional later (D9) |
+| PRV-3 | Provider behind an interface; URL from config; local mock available | Done | 6, 7 | `Sender` interface and `PROVIDER_URL`; local fake provider (`cmd/fakeprovider`, D9 revised) with delay and failure rate, default in Compose; webhook.site via `PROVIDER_URL` |
 
 ## 6. Optional Features
 
@@ -77,7 +77,7 @@ Status values: **Done**, **Partial**, **Todo**.
 |---|---|---|---|---|
 | DEL-1 | Repository with clean commit history | Partial | all | Conventional Commits enforced by hook + CI (done); ongoing |
 | DEL-2 | README.md: setup, architecture overview, API examples | Todo | 15 | |
-| DEL-3 | Docker Compose: one-command setup (`docker compose up`) | Done | 2, 6 | api, worker, migrations, PostgreSQL, Redis; the worker needs `PROVIDER_URL` (shell or `.env`) |
+| DEL-3 | Docker Compose: one-command setup (`docker compose up`) | Done | 2, 6 | api, worker, fake provider, migrations, PostgreSQL, Redis; works without any settings (the worker uses the fake provider unless `PROVIDER_URL` is set) |
 | DEL-4 | API documentation: Swagger/OpenAPI specification | Partial | 4–15 | `docs/openapi.yaml` (OpenAPI 3.0.3) covers every endpoint so far (create, batch, get, list, batch status, both cancels, health); tests keep it in sync with the router and real responses; grows with each endpoint; Swagger UI in Phase 15 |
 | DEL-5 | Database migrations: versioned schema changes | Done | 3 | golang-migrate, numbered up/down SQL files, applied automatically by Compose; new migrations added as features need them |
 | DEL-6 | Test suite runnable with a single command | Partial | all | `make test` (race detector) and `make check` (done); repository tests use testcontainers and need Docker; grows with each step |

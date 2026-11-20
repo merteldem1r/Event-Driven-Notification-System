@@ -1,4 +1,4 @@
-.PHONY: hooks run-api run-worker test lint check up down infra-up logs migrate-up migrate-down
+.PHONY: hooks run-api run-worker run-fakeprovider test lint check up down infra-up logs migrate-up migrate-down
 
 # Same version as CI (.github/workflows/ci.yml). Change both together.
 GOLANGCI_LINT_VERSION := v2.15.0
@@ -15,6 +15,10 @@ run-api:
 ## run-worker: start the worker locally (Ctrl+C stops it gracefully)
 run-worker:
 	go run ./cmd/worker
+
+## run-fakeprovider: start the local fake provider on port 9090 (Ctrl+C to stop)
+run-fakeprovider:
+	go run ./cmd/fakeprovider
 
 ## test: run all tests with the race detector (repository tests need Docker running)
 test:
@@ -52,6 +56,6 @@ migrate-up:
 migrate-down:
 	docker compose run --rm migrate down 1
 
-## logs: follow the API and worker container logs (Ctrl+C stops following, not the containers)
+## logs: follow the API, worker and fake provider container logs (Ctrl+C stops following, not the containers)
 logs:
-	docker compose logs -f api worker
+	docker compose logs -f api worker fakeprovider

@@ -1,6 +1,7 @@
 # Multi-stage build: compile in a big image that has Go, ship a tiny image
-# that contains only the compiled binaries. One image holds both programs;
-# it runs the API by default, and Compose starts the worker with entrypoint /worker.
+# that contains only the compiled binaries. One image holds all three programs;
+# it runs the API by default, and Compose starts the worker and the fake provider
+# with entrypoint /worker and /fakeprovider.
 
 # ---- Stage 1: build ----
 # Same Go version as go.mod (CI reads it from there); change both together.
@@ -19,7 +20,8 @@ COPY . .
 # -trimpath      -> no paths from the build machine inside the binary
 # -ldflags=-s -w -> strip debug symbols, smaller binary
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/api ./cmd/api && \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/worker ./cmd/worker
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/worker ./cmd/worker && \
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/fakeprovider ./cmd/fakeprovider
 
 # ---- Stage 2: run ----
 # distroless/static: no shell, no package manager, just CA certificates
@@ -28,6 +30,7 @@ FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=build /out/api /api
 COPY --from=build /out/worker /worker
+COPY --from=build /out/fakeprovider /fakeprovider
 
 # Documentation only: the port the API listens on (HTTP_PORT default).
 EXPOSE 8080

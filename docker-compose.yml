@@ -1,10 +1,11 @@
 # Local development stack.
-#   Whole system:          make up         (api + worker + postgres + redis + migrations)
+#   Whole system:          make up         (api + worker + fake provider + postgres + redis + migrations)
 #   Only infrastructure:   make infra-up   (postgres + redis + migrations)
 #   More workers:          docker compose up -d --scale worker=3
 #
-# The worker needs PROVIDER_URL (your webhook.site URL, D9). Compose reads it from your shell
-# or from a .env file next to this file (gitignored):  PROVIDER_URL=https://webhook.site/<your-id>
+# The worker sends to the local fake provider by default (D9). To send to webhook.site instead,
+# set PROVIDER_URL in your shell or in a .env file next to this file (gitignored):
+#   PROVIDER_URL=https://webhook.site/<your-id>
 #
 # Credentials here are for local development only.
 
@@ -37,8 +38,8 @@ services:
       LOG_LEVEL: info
       DATABASE_URL: postgres://notification:notification@postgres:5432/notification?sslmode=disable
       REDIS_URL: redis://redis:6379/0 # shared rate limit, 100/s per channel by default (D15)
-      # Empty if unset: the worker then stops with a clear message, everything else still runs.
-      PROVIDER_URL: ${PROVIDER_URL:-}
+      # The fake provider unless PROVIDER_URL is set (shell or .env).
+      PROVIDER_URL: ${PROVIDER_URL:-http://fakeprovider:9090/}
     # docker stop sends SIGTERM and kills after this long. Longer than WORKER_SHUTDOWN_TIMEOUT (25s),
     # so in-flight sends can finish (the 10s default would cut them off).
     stop_grace_period: 30s
@@ -49,6 +50,20 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      fakeprovider:
+        condition: service_started # no health check: the image has no shell or curl
+
+  # Local stand-in for the external provider (D9): answers like webhook.site, logs how many
+  # messages per channel it received each second. Delay and failure rate from the shell or .env.
+  fakeprovider:
+    build: .
+    entrypoint: ["/fakeprovider"]
+    ports:
+      - "127.0.0.1:9090:9090" # also reachable from your Mac, e.g. for make run-worker
+    environment:
+      FAKE_PROVIDER_PORT: "9090"
+      FAKE_PROVIDER_LATENCY: ${FAKE_PROVIDER_LATENCY:-50ms}
+      FAKE_PROVIDER_FAILURE_RATE: ${FAKE_PROVIDER_FAILURE_RATE:-0}
 
   # One-off job: applies pending migrations, then exits.
   migrate:

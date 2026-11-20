@@ -209,6 +209,86 @@ func TestLoad(t *testing.T) {
 	}
 }
 
+func TestLoadFakeProvider(t *testing.T) {
+	tests := []struct {
+		name    string
+		env     map[string]string
+		want    FakeProvider
+		wantErr string
+	}{
+		{
+			name: "defaults, no database needed",
+			env:  map[string]string{},
+			want: FakeProvider{Port: 9090, LogLevel: slog.LevelInfo, Latency: 50 * time.Millisecond},
+		},
+		{
+			name: "custom values",
+			env: map[string]string{
+				"FAKE_PROVIDER_PORT": "7000", "LOG_LEVEL": "debug",
+				"FAKE_PROVIDER_LATENCY": "0s", "FAKE_PROVIDER_FAILURE_RATE": "0.25",
+			},
+			want: FakeProvider{Port: 7000, LogLevel: slog.LevelDebug, FailureRate: 0.25},
+		},
+		{
+			name:    "port out of range",
+			env:     map[string]string{"FAKE_PROVIDER_PORT": "70000"},
+			wantErr: "FAKE_PROVIDER_PORT must be a port number",
+		},
+		{
+			name:    "negative latency",
+			env:     map[string]string{"FAKE_PROVIDER_LATENCY": "-1s"},
+			wantErr: "FAKE_PROVIDER_LATENCY must be",
+		},
+		{
+			name:    "latency too long",
+			env:     map[string]string{"FAKE_PROVIDER_LATENCY": "2m"},
+			wantErr: "FAKE_PROVIDER_LATENCY must be",
+		},
+		{
+			name:    "failure rate above 1",
+			env:     map[string]string{"FAKE_PROVIDER_FAILURE_RATE": "1.5"},
+			wantErr: "FAKE_PROVIDER_FAILURE_RATE must be a number from 0 to 1",
+		},
+		{
+			name:    "failure rate as percent",
+			env:     map[string]string{"FAKE_PROVIDER_FAILURE_RATE": "10%"},
+			wantErr: "FAKE_PROVIDER_FAILURE_RATE must be",
+		},
+		{
+			name:    "invalid log level",
+			env:     map[string]string{"LOG_LEVEL": "loud"},
+			wantErr: "LOG_LEVEL must be",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, key := range []string{
+				"DATABASE_URL", "LOG_LEVEL", "FAKE_PROVIDER_PORT", "FAKE_PROVIDER_LATENCY", "FAKE_PROVIDER_FAILURE_RATE",
+			} {
+				t.Setenv(key, "")
+			}
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
+
+			got, err := LoadFakeProvider()
+
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("error = %v, want it to contain %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("got %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
 // writeEnvFile creates a temporary env file with the given content.
 func writeEnvFile(t *testing.T, content string) string {
 	t.Helper()
