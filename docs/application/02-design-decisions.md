@@ -34,6 +34,7 @@
 | D22 | Templates: syntax, reference, lifecycle, variables | Phase 11 (templates) | Decided: `{{name}}` placeholders; by unique name; create, get, list only; missing variable 400, extras ignored |
 | D23 | CI/CD: image publishing and extra checks | Phase 14 (CI/CD) | Decided: build always, publish to GHCR from main after every check; govulncheck, migrations up/down/up, smoke test; no Dependabot |
 | D24 | A visual web page of the system: simulation or live | Phase 16 (web) | Decided: simulation in the browser, Next.js in `web/`, deployable on Vercel |
+| D25 | A guided tour of the web page | Phase 16 (web) | Decided: own component, light blur, starts on the first visit, a few steps that act |
 
 **Why only D1–D3 now?** They decide *what the database schema looks like, how workers are
 written, and what runs in docker-compose*. Changing them later means rewriting a lot.
@@ -645,6 +646,27 @@ decision and the Go file each rule comes from, and tests check the same behavior
 and the load test check. The page says plainly that it is a simulation and links to the real
 service. A live mode can be added later behind the same events.
 
+## D25 — A guided tour of the web page
+
+The page shows every part at once, so a first-time visitor does not know where to look. A
+tour dims and blurs the page except one part, explains it in a card, and moves on with Next.
+
+- **How to build it.** A library such as driver.js gives the spotlight and the buttons, but it
+  only dims (no blur), and it can't zoom the diagram onto one node or run a scenario during a
+  step, which we would write anyway. Our own component is about 200 lines on the pieces the
+  page already uses, with no new dependency.
+- **Blur or dim.** Blur over the moving diagram costs the graphics card work on every frame,
+  the kind of cost the performance pass removed. A light blur plus dimming, measured in Chrome,
+  with plain dimming as the fallback if it drops frames.
+- **When it starts.** On the first visit, remembered in the browser; a Tour button replays it
+  and `/?tour=1` links to it. A scenario link (`/?scenario=...`) does not start it.
+- **What the steps do.** Most only explain while the simulation keeps running. Three act: the
+  queue step sends a burst, the Redis step takes Redis down until you move on, and the inspect
+  step sends one notification to follow.
+
+Chosen: **our own component, light blur with dimming, first visit plus a Tour button, three
+steps that act.**
+
 ---
 
 ## Resulting architecture
@@ -695,6 +717,7 @@ service. A live mode can be added later behind the same events.
 | D22 | Templates | **`{{name}}` placeholders, by unique name; `POST`, `GET /api/v1/templates` and `GET /api/v1/templates/{name}` only (immutable); `template` + `variables` instead of `content`; rendered at creation; a missing variable is a `400`, extras are ignored; not tied to a channel** | Simple to explain and safe (no logic in templates); immutable templates can't break clients; the stored content is the final text | No conditions or loops; a new wording needs a new name | 2026-11-20 |
 | D23 | CI/CD | **Jobs in parallel: lint, tests, govulncheck, migrations up/down/up, smoke test (`make smoke`); then the Docker image, built on every run and published to `ghcr.io` from `main` only, tagged `sha-<commit>` and `latest`; no load test in CI; no Dependabot** | Every commit on main has a tested, ready-to-run image; the checks cover what unit tests can't (down migrations, the built image, known vulnerabilities) | Public image; dependencies updated by hand | 2026-11-20 |
 | D24 | Web page of the system | **A simulation in the browser** (`web/`, Next.js, static, Vercel); the same rules and defaults as the Go service, ported in one file with tests; a live mode later if wanted | Anyone can open it from a link; no backend to host or protect | It is a model, not the running service; it must be kept in step with the Go rules | 2026-11-20 |
+| D25 | Guided tour | **Own component** (spotlight with a light blur, card per step, keyboard), **starts on the first visit**, Tour button and `/?tour=1` to replay, three steps that act (burst, Redis down, one notification) | A first-time visitor learns where to look and what each part means in about a minute; the diagram can zoom to each block; no new dependency | A ready-made library; some work on every frame while the blur is shown | 2026-11-20 |
 | D9 | Provider | **webhook.site only, for now**: the worker sends to `PROVIDER_URL` (your own webhook.site URL, set to answer `202 {messageId, status, timestamp}`); an own local fake provider is noted in the plan as an optional later step | Exactly the integration the requirements ask for; less code now; every send is visible in the browser | Offline runs; load tests beyond webhook.site's free request limit; a provider that fails or slows down on purpose for retry tests (until the fake is added) | 2026-11-20 |
 | D8 | Retry numbers | **5 attempts; waits start at 10 s and double, capped at 10 min; equal jitter (half to all of the wait); `Retry-After` used when longer, same cap**; then `failed` with the last error; `RETRY_MAX_ATTEMPTS`, `RETRY_BASE_DELAY`, `RETRY_MAX_DELAY` | Covers blips and short outages (~2.5 min in total) while messages are still useful; retries that failed together are spread out; never earlier than the provider asked, never parked for days | Long outages end in `failed` rather than waiting longer | 2026-11-20 |
 | D9 (revised) | Provider | **Own fake provider by default** (`cmd/fakeprovider`, `internal/fakeprovider`): answers `POST` on any path like webhook.site with `202 {messageId, status, timestamp}`; `FAKE_PROVIDER_LATENCY` (default 50ms) and `FAKE_PROVIDER_FAILURE_RATE` (share answered `503`); logs the messages received per channel each second; a Compose service the worker uses unless `PROVIDER_URL` is set (e.g. to webhook.site in `.env`) | Load tests at 100/s per channel without webhook.site's free request limit; provider failures on demand for Phase 8; works offline; the per-second report measures the rate limit | A second, simpler provider than the real one (no `429`, no `Retry-After` yet; added when Phase 8 needs them) | 2026-11-20 |

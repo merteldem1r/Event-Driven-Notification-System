@@ -40,7 +40,7 @@ export function Charts() {
   const series = useSim((s) => s.snap.series);
   const data = useMemo<Row[]>(() => series.map((p) => ({ ...p, label: `${p.t}s` })), [series]);
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
+    <div data-tour="charts" className="grid gap-4 lg:grid-cols-2">
       <Card size="sm">
         <CardHeader>
           <CardTitle>Arrivals at the provider, per second</CardTitle>

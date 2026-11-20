@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useSim } from "@/lib/sim/store";
 import { tokenBus } from "@/lib/sim/tokens";
 import { nodeTypes } from "./nodes";
+import { useTour } from "./tour";
 
 // TokenEdge is a quiet line plus a layer the token bus draws moving dots into.
 function TokenEdge({ id, label, ...props }: EdgeProps) {
@@ -53,18 +54,20 @@ export function Flow({ dark }: { dark: boolean }) {
 
 function Diagram({ dark }: { dark: boolean }) {
   const workerIds = useSim((s) => s.snap.workers.map((w) => w.id).join(","));
+  const focus = useTour((s) => s.focus?.join(",") ?? ""); // nodes the tour is explaining
   const { fitView } = useReactFlow();
   const first = useRef(true);
 
-  // Workers came or went: refit once the new nodes are measured, without remounting the canvas.
+  // Workers came or went, or the tour moved: refit once the nodes are measured, without remounting.
   useEffect(() => {
     if (first.current) {
       first.current = false;
       return;
     }
-    const t = setTimeout(() => fitView({ ...FIT, duration: 300 }), 50);
+    const opts = focus ? { nodes: focus.split(",").map((id) => ({ id })), padding: 0.3, maxZoom: 1.25 } : FIT;
+    const t = setTimeout(() => fitView({ ...opts, duration: 400 }), 50);
     return () => clearTimeout(t);
-  }, [workerIds, fitView]);
+  }, [workerIds, focus, fitView]);
 
   const { nodes, edges } = useMemo(() => {
     const ids = workerIds ? workerIds.split(",").map(Number) : [];

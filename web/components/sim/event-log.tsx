@@ -29,7 +29,7 @@ export function EventLog() {
   }, [lines]);
 
   return (
-    <Card size="sm">
+    <Card size="sm" data-tour="logs">
       <CardHeader>
         <CardTitle>Logs</CardTitle>
         <CardDescription>What the API and workers would print. Click a line to inspect its notification.</CardDescription>

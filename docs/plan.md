@@ -152,8 +152,14 @@ them, and each notification's story. Runs in the browser, deployable on Vercel.
   frames per second. Fixed: worker kill button not clickable, outage logged many times when
   Redis went down mid-send, recovery line lost from Problems on a busy log, zoom reset when
   workers changed. 36 Vitest tests and a 57-step click-through of every control
+- [x] 16.1b Site icon: three channel dots on an edge, as on the diagram (`web/app/icon.svg`,
+  `favicon.ico`, `apple-icon.png`)
+- [x] 16.1c Guided tour (D25): 14 steps with a blurred spotlight and a card, the diagram zooming
+  to each block, three steps that act (burst, Redis down, one notification); starts on the first
+  visit, replayed from the Tour button or `/?tour=1`; keys and phones; tested step by step in
+  Chrome, 60 fps with the blur on during a burst
 - [ ] 16.2 Deploy to Vercel (root directory `web/`) and link the page from the README **(next)**
-- [ ] 16.3 Improvements after a first look (guided tour, templates in the model, more scenarios)
+- [ ] 16.3 Improvements after a first look (templates in the model, more scenarios)
 
 ## Phase 15 · Proof and polish (done)
 - [x] 15.1 Load test: burst proves the 100/s cap holds (IMP-9); done early in 7.4

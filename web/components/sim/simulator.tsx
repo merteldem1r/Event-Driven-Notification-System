@@ -15,6 +15,7 @@ import { ControlPanel } from "./controls";
 import { EventLog } from "./event-log";
 import { Flow } from "./flow";
 import { Legend } from "./legend";
+import { Tour, TourButton, tourSeen, useTour } from "./tour";
 import { clock, num } from "./shared";
 
 // runScenario starts a linkable scenario, e.g. /?scenario=burst.
@@ -37,6 +38,13 @@ export default function Simulator() {
   const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
   useEffect(() => startDriver(), []);
   useEffect(() => runScenario(new URLSearchParams(window.location.search).get("scenario")), []);
+  // The tour starts on the first visit, or from a /?tour=1 link; a scenario link skips it.
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    if (q.get("tour") !== "1" && (q.has("scenario") || tourSeen())) return;
+    const t = setTimeout(() => useTour.getState().start(), 600);
+    return () => clearTimeout(t);
+  }, []);
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
     try {
@@ -53,12 +61,12 @@ export default function Simulator() {
         <main className="mx-auto w-full max-w-[1600px] flex-1 space-y-4 px-4 py-4">
           <Intro />
           <div className="grid gap-4 lg:grid-cols-[1fr_340px]">
-            <div className="relative h-[420px] overflow-hidden rounded-xl border bg-canvas sm:h-[560px]">
+            <div data-tour="diagram" className="relative h-[420px] overflow-hidden rounded-xl border bg-canvas sm:h-[560px]">
               <Flow dark={dark} />
               <Legend />
               <Toast />
             </div>
-            <div className="h-[560px] overflow-hidden rounded-xl border bg-card">
+            <div data-tour="panel" className="h-[560px] overflow-hidden rounded-xl border bg-card">
               <ControlPanel />
             </div>
           </div>
@@ -74,6 +82,7 @@ export default function Simulator() {
           </footer>
         </main>
       </div>
+      <Tour />
     </TooltipProvider>
   );
 }
@@ -87,9 +96,10 @@ function TopBar({ dark, onTheme }: { dark: boolean; onTheme: () => void }) {
   return (
     <header className="sticky top-0 z-20 border-b bg-background">
       <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-3 px-4 py-2.5">
-        <div className="flex items-center gap-2">
+        <div className="flex w-full items-center gap-2 sm:w-auto">
           <span className="text-sm font-semibold">Notification Service</span>
           <Badge variant="secondary">simulation</Badge>
+          <TourButton />
         </div>
         <div className="flex w-full items-center justify-between gap-2 sm:ml-auto sm:w-auto">
           <span className="font-mono text-xs text-muted-foreground tabular-nums">t {clock(now)}</span>
@@ -137,7 +147,7 @@ function Totals() {
     ["leases recovered", t.recovered, t.recovered ? "text-warn" : "", "taken back from a dead worker"],
   ];
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+    <div data-tour="totals" className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
       {items.map(([label, value, tone, hint]) => (
         <div key={label} className="rounded-xl border bg-card px-3 py-2.5">
           <div className="text-xs text-muted-foreground">{label}</div>

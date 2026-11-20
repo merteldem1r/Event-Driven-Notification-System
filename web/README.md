@@ -16,6 +16,12 @@ It is a **simulation**, not the running service. To run the real system, see the
                                                                      └──slot?──► Redis
 ```
 
+- **Guided tour.** On the first visit, a tour of 14 short steps blurs the page except one part
+  and explains it: the API, PostgreSQL as the queue, a worker, Redis, the provider, the dots, the
+  side panel, the totals, the charts and the logs. The diagram zooms to each block. Three steps
+  act, so there is something to watch: the queue step sends a burst, the Redis step takes Redis
+  down until you move on, and the inspect step sends one notification. The Tour button in the
+  top bar replays it; `/?tour=1` links to it. Keys: arrows to move, Esc to close.
 - **Diagram.** One block per part of the service. Dots move along the edges: color is the
   channel, size is the priority, and the dots going back to PostgreSQL show the result (green
   sent, yellow retry later, red failed).
@@ -39,7 +45,7 @@ It is a **simulation**, not the running service. To run the real system, see the
 - **Speed**: from 0.1x (to watch single messages) to 5x (to see a 60 s lease expire quickly).
 
 Scenarios can be linked: `/?scenario=burst`, `/?scenario=retries`, `/?scenario=redis`,
-`/?scenario=crash`.
+`/?scenario=crash`. A scenario link does not start the tour.
 
 ## Running it
 
@@ -63,7 +69,7 @@ Three layers, each in its own place:
 |---|---|---|
 | Model | `lib/sim/rules.ts`, `lib/sim/limiter.ts`, `lib/sim/heap.ts`, `lib/sim/engine.ts` | The service's rules and a deterministic simulation of it. Plain TypeScript, no React, fully tested. |
 | State | `lib/sim/store.ts`, `lib/sim/tokens.ts` | Runs the model on animation frames, publishes snapshots to the page about 10 times a second and the log 4 times a second, and turns events into moving dots. |
-| Page | `app/`, `components/sim/`, `components/ui/` | The diagram, side panel, charts and logs. |
+| Page | `app/`, `components/sim/`, `components/ui/` | The diagram, side panel, charts, logs and the guided tour (`tour.tsx`). |
 
 **The model is event-driven.** Every worker loop has a wake-up time: after an empty queue it
 sleeps one poll interval, while waiting for a slot it sleeps until Redis says the next slot
