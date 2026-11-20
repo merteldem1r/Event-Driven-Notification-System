@@ -21,6 +21,7 @@ type Queue interface {
 	MarkSent(ctx context.Context, id uuid.UUID, attempt int, providerMessageID string) (ok bool, _ error)
 	MarkFailed(ctx context.Context, id uuid.UUID, attempt int, lastError string) (ok bool, _ error)
 	Release(ctx context.Context, id uuid.UUID, attempt int) (ok bool, _ error)
+	Unclaim(ctx context.Context, id uuid.UUID, attempt int) (ok bool, _ error)
 }
 
 // Limiter hands out rate-limit slots per channel, shared by all workers (D15).
@@ -56,20 +57,14 @@ type Dispatcher struct {
 	turn    atomic.Uint64 // position in claimPattern, shared by this channel's worker loops
 }
 
-// NewDispatcher returns a Dispatcher for channel ch that waits for limiter before each claim,
-// leases each claimed notification for lease and sends it through sender.
+// NewDispatcher returns a Dispatcher for channel ch that leases each claimed notification for
+// lease, waits for a slot of limiter, and sends it through sender.
 func NewDispatcher(ch domain.Channel, queue Queue, sender Sender, limiter Limiter, lease time.Duration, logger *slog.Logger) *Dispatcher {
 	return &Dispatcher{channel: ch, queue: queue, sender: sender, limiter: limiter, lease: lease, logger: logger}
 }
 
-// Wait blocks until the channel's rate limit allows one more send. It comes before the claim
-// (D16), so nothing is held while waiting and a Redis outage claims nothing.
-func (d *Dispatcher) Wait(ctx context.Context) error {
-	return d.limiter.Wait(ctx, d.channel)
-}
-
 // ProcessNext takes the next notification of the channel and delivers it; found is false if
-// nothing is due. Each call uses the slot of one Wait.
+// nothing is due.
 func (d *Dispatcher) ProcessNext(ctx context.Context) (found bool, err error) {
 	for _, p := range d.claimOrder() {
 		n, ok, err := d.queue.ClaimNext(ctx, d.channel, p, d.lease)
@@ -96,8 +91,9 @@ func (d *Dispatcher) claimOrder() []domain.Priority {
 	return order
 }
 
-// deliver sends a claimed notification and records the result: sent, failed, or back to
-// pending if the send was cut off by shutdown. Only a failure to record is returned.
+// deliver waits for a rate-limit slot, sends a claimed notification and records the result:
+// sent, failed, or back to pending if shutdown cut it off. A failure to record, or to get a
+// slot, is returned.
 func (d *Dispatcher) deliver(ctx context.Context, n domain.Notification) error {
 	if n.CorrelationID != nil { // the API's ID, so one search finds the request and its delivery
 		ctx = logging.WithCorrelationID(ctx, *n.CorrelationID)
@@ -105,12 +101,18 @@ func (d *Dispatcher) deliver(ctx context.Context, n domain.Notification) error {
 	// IDs only: never the recipient or the content.
 	log := d.logger.With("notification_id", n.ID, "channel", n.Channel, "priority", n.Priority.String(), "attempt", n.Attempts)
 
+	// The slot comes right before the send, so nothing slow (like a database pause) sits
+	// between the permission and the request reaching the provider (D16).
+	if err := d.limiter.Wait(ctx, d.channel); err != nil {
+		return d.unclaim(ctx, log, n, err)
+	}
+
 	start := time.Now()
 	receipt, sendErr := d.sender.Send(ctx, toMessage(n))
 	took := time.Since(start).Milliseconds()
 
 	// Record even if shutdown cancels ctx now: a send that isn't recorded as sent would be sent again.
-	rec, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
+	rec, cancel := recordContext(ctx)
 	defer cancel()
 
 	var recorded bool
@@ -134,6 +136,30 @@ func (d *Dispatcher) deliver(ctx context.Context, n domain.Notification) error {
 		log.WarnContext(ctx, "result not recorded: the notification was claimed again meanwhile")
 	}
 	return nil
+}
+
+// unclaim puts n back in the queue without counting the attempt, since nothing was sent: the
+// rate limit couldn't be checked (e.g. Redis down: fail closed) or shutdown cut the wait off.
+func (d *Dispatcher) unclaim(ctx context.Context, log *slog.Logger, n domain.Notification, waitErr error) error {
+	rec, cancel := recordContext(ctx)
+	defer cancel()
+	recorded, err := d.queue.Unclaim(rec, n.ID, n.Attempts)
+	if err != nil {
+		return fmt.Errorf("put back after no rate-limit slot: %w", err)
+	}
+	if !recorded {
+		log.WarnContext(ctx, "not put back: the notification was claimed again meanwhile")
+	}
+	if ctx.Err() != nil { // shutdown deadline, not a problem with the limiter
+		log.WarnContext(ctx, "rate-limit wait cut off by shutdown, notification back in the queue")
+		return nil
+	}
+	return waitErr // the worker logs it once per outage and waits before the next try
+}
+
+// recordContext is for saving a result: it survives shutdown, but not forever.
+func recordContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
 }
 
 // toMessage maps a notification to what the provider receives.

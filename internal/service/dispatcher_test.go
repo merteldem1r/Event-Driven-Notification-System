@@ -23,7 +23,7 @@ type fakeQueue struct {
 	channels  []domain.Channel  // the channel of every ClaimNext call
 	claimed   []domain.Priority // the successful ones
 	lease     time.Duration
-	results   []string // "sent:<messageId>", "failed:<error>" or "released"
+	results   []string // "sent:<messageId>", "failed:<error>", "released" or "unclaimed"
 	recordCtx error    // ctx.Err() of the last record call
 }
 
@@ -46,6 +46,10 @@ func (q *fakeQueue) MarkFailed(ctx context.Context, _ uuid.UUID, _ int, lastErro
 
 func (q *fakeQueue) Release(ctx context.Context, _ uuid.UUID, _ int) (bool, error) {
 	return q.record(ctx, "released")
+}
+
+func (q *fakeQueue) Unclaim(ctx context.Context, _ uuid.UUID, _ int) (bool, error) {
+	return q.record(ctx, "unclaimed")
 }
 
 // fakeSender answers every send with err, or a receipt; it keeps the last message.
@@ -81,14 +85,23 @@ func (q *fakeQueue) ClaimNext(_ context.Context, ch domain.Channel, p domain.Pri
 	return domain.Notification{ID: uuid.New(), Channel: ch, Priority: p, Status: domain.StatusProcessing, Attempts: 1}, true, nil
 }
 
-// fakeLimiter answers every Wait with err and records the channels asked for.
+// fakeLimiter answers every Wait with err (or, with ctxErr, the context's error) and records
+// the channels asked for. before runs first, e.g. to cancel the worker's context.
 type fakeLimiter struct {
 	err      error
+	ctxErr   bool
+	before   func()
 	channels []domain.Channel
 }
 
-func (l *fakeLimiter) Wait(_ context.Context, ch domain.Channel) error {
+func (l *fakeLimiter) Wait(ctx context.Context, ch domain.Channel) error {
 	l.channels = append(l.channels, ch)
+	if l.before != nil {
+		l.before()
+	}
+	if l.ctxErr {
+		return ctx.Err()
+	}
 	return l.err
 }
 
@@ -175,20 +188,73 @@ func TestProcessNext_ClaimsOnlyItsChannel(t *testing.T) {
 	}
 }
 
-// Wait asks the limiter for a slot of the dispatcher's own channel and passes its answer on.
-func TestWait_AsksTheLimiterForItsChannel(t *testing.T) {
-	l := &fakeLimiter{}
-	d := NewDispatcher(domain.ChannelPush, &fakeQueue{}, &fakeSender{}, l, time.Minute, slog.New(slog.DiscardHandler))
-	if err := d.Wait(t.Context()); err != nil {
-		t.Fatalf("Wait = %v, want nil", err)
+// The slot is asked for after the claim, right before the send, for the dispatcher's own channel (D16).
+func TestProcessNext_WaitsForASlotBeforeSending(t *testing.T) {
+	q := &fakeQueue{due: map[domain.Priority]int{domain.PriorityNormal: 1}}
+	s := &fakeSender{}
+	l := &fakeLimiter{before: func() {
+		if s.got.ID != uuid.Nil {
+			t.Error("sent before the rate-limit slot was given")
+		}
+	}}
+	d := NewDispatcher(domain.ChannelPush, q, s, l, time.Minute, slog.New(slog.DiscardHandler))
+
+	if found, err := d.ProcessNext(t.Context()); !found || err != nil {
+		t.Fatalf("ProcessNext = %v, %v; want a delivery", found, err)
 	}
 	if len(l.channels) != 1 || l.channels[0] != domain.ChannelPush {
 		t.Errorf("limiter asked for %v, want [push]", l.channels)
 	}
+	if len(q.results) != 1 || q.results[0] != "sent:msg-1" {
+		t.Errorf("results = %v, want [sent:msg-1]", q.results)
+	}
+}
 
-	l.err = errors.New("redis down")
-	if err := d.Wait(t.Context()); !errors.Is(err, l.err) {
-		t.Errorf("Wait = %v, want the limiter's error", err)
+// With an empty queue nothing is claimed, so no slot is taken (idle loops use none).
+func TestProcessNext_EmptyQueueTakesNoSlot(t *testing.T) {
+	l := &fakeLimiter{}
+	d := NewDispatcher(domain.ChannelSMS, &fakeQueue{due: map[domain.Priority]int{}}, &fakeSender{}, l, time.Minute, slog.New(slog.DiscardHandler))
+	if _, err := d.ProcessNext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(l.channels) != 0 {
+		t.Errorf("limiter asked %d times, want 0", len(l.channels))
+	}
+}
+
+// No slot (e.g. Redis down): nothing is sent, the notification goes back without counting
+// the attempt (fail closed), and the error reaches the worker so it waits before retrying.
+func TestProcessNext_NoSlotPutsBackWithoutSending(t *testing.T) {
+	q := &fakeQueue{due: map[domain.Priority]int{domain.PriorityNormal: 1}}
+	s := &fakeSender{}
+	redisDown := errors.New("rate limit sms: connection refused")
+	d := NewDispatcher(domain.ChannelSMS, q, s, &fakeLimiter{err: redisDown}, time.Minute, slog.New(slog.DiscardHandler))
+
+	found, err := d.ProcessNext(t.Context())
+	if !found || !errors.Is(err, redisDown) {
+		t.Fatalf("ProcessNext = %v, %v; want found and the limiter's error", found, err)
+	}
+	if s.got.ID != uuid.Nil {
+		t.Error("sent without a rate-limit slot")
+	}
+	if len(q.results) != 1 || q.results[0] != "unclaimed" {
+		t.Errorf("results = %v, want [unclaimed]", q.results)
+	}
+}
+
+// Shutdown's deadline during the wait: put back without counting the attempt, and no error,
+// since the limiter didn't fail. The put-back is saved even though the context is cancelled.
+func TestProcessNext_ShutdownDuringWaitPutsBack(t *testing.T) {
+	q := &fakeQueue{due: map[domain.Priority]int{domain.PriorityNormal: 1}}
+	ctx, cancel := context.WithCancel(t.Context())
+	l := &fakeLimiter{before: cancel, ctxErr: true}
+	d := NewDispatcher(domain.ChannelSMS, q, &fakeSender{}, l, time.Minute, slog.New(slog.DiscardHandler))
+
+	if _, err := d.ProcessNext(ctx); err != nil {
+		t.Fatalf("ProcessNext = %v, want nil", err)
+	}
+	if len(q.results) != 1 || q.results[0] != "unclaimed" || q.recordCtx != nil {
+		t.Errorf("results = %v (record ctx error %v), want [unclaimed] saved with a live context", q.results, q.recordCtx)
 	}
 }
 

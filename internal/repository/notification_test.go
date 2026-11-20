@@ -953,6 +953,22 @@ func TestRecordResults(t *testing.T) {
 		}
 	})
 
+	// Nothing was sent, so the attempt doesn't count: the next claim is attempt 1 again.
+	t.Run("unclaimed", func(t *testing.T) {
+		n := claimOne(t)
+		if ok, err := repo.Unclaim(t.Context(), n.ID, n.Attempts); err != nil || !ok {
+			t.Fatalf("Unclaim = %v, %v", ok, err)
+		}
+		if leaseOf(t, n.ID) != nil {
+			t.Error("lease kept after Unclaim")
+		}
+		again, ok, err := repo.ClaimNext(t.Context(), domain.ChannelSMS, domain.PriorityNormal, time.Minute)
+		if err != nil || !ok || again.ID != n.ID || again.Attempts != 1 {
+			t.Errorf("claim after unclaim = %s (attempt %d), %v, %v; want the same notification, attempt 1",
+				again.ID, again.Attempts, ok, err)
+		}
+	})
+
 	// A claim that was superseded can't overwrite the newer claim's result.
 	t.Run("stale attempt changes nothing", func(t *testing.T) {
 		n := claimOne(t)

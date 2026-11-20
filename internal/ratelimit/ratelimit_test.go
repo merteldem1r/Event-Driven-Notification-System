@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -150,6 +151,35 @@ func TestWait_LimitIsSharedAcrossProcesses(t *testing.T) {
 	}
 	t.Logf("two processes, %d loops each: %d + %d = %d sends in %.2fs",
 		loopsPerProcess, sent[0].Load(), sent[1].Load(), total, elapsed)
+}
+
+// A Redis that accepts the connection but never answers must not hold the caller for long.
+func TestWait_SilentRedisFailsWithinTheCallTimeout(t *testing.T) {
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() }) // nothing to do if closing fails in a test
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return // listener closed
+			}
+			t.Cleanup(func() { _ = conn.Close() }) // read nothing, answer nothing
+		}
+	}()
+	client := redis.NewClient(&redis.Options{Addr: ln.Addr().String(), MaxRetries: -1, ContextTimeoutEnabled: true})
+	t.Cleanup(func() { _ = client.Close() }) // nothing to do if closing fails in a test
+
+	start := time.Now()
+	err = New(client, 100, 10).Wait(t.Context(), domain.ChannelSMS)
+	if err == nil {
+		t.Fatal("Wait returned nil from a Redis that never answers, want an error (fail closed)")
+	}
+	if took := time.Since(start); took > callTimeout+time.Second {
+		t.Errorf("Wait took %v, want about the call timeout (%v)", took, callTimeout)
+	}
 }
 
 func TestWait_RedisDownMeansNoSend(t *testing.T) {

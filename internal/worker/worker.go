@@ -15,9 +15,6 @@ var ErrShutdownTimeout = errors.New("shutdown timeout: in-flight work was cancel
 
 // Processor handles one queued notification per call.
 type Processor interface {
-	// Wait blocks until the next notification may be taken, e.g. until a rate-limit slot is
-	// free. It returns an error if ctx ends first or permission can't be checked.
-	Wait(ctx context.Context) error
 	// ProcessNext takes the next notification from the queue and handles it.
 	// found is false when the queue had nothing to take.
 	ProcessNext(ctx context.Context) (found bool, err error)
@@ -39,12 +36,13 @@ type Worker struct {
 	trouble trouble
 }
 
-// trouble tracks errors in a row across all loops, so an outage (e.g. Redis or the database
-// down) is logged when it starts and when it ends, not on every retry of every loop.
+// trouble tracks an outage (e.g. Redis or the database down) across all loops, so it is
+// logged when it starts and when it ends, not on every retry of every loop. It starts with
+// the first failed try and ends with the first delivered notification.
 type trouble struct {
 	mu       sync.Mutex
-	failing  int       // loops whose last try failed
-	since    time.Time // when the first of them failed
+	active   bool
+	since    time.Time // the first failed try
 	failures int       // failed tries since then
 }
 
@@ -96,45 +94,31 @@ func (w *Worker) Run(ctx context.Context) error {
 // loop has proc process one notification after another until stop is cancelled.
 // stop decides whether to take more work; work is passed to the processor.
 func (w *Worker) loop(stop, work context.Context, proc Processor, id int) {
-	failing := false // this loop's last try failed
 	for stop.Err() == nil {
-		// Nothing is taken while waiting, so the stop signal ends the wait right away.
-		err := proc.Wait(stop)
-		if stop.Err() != nil {
-			return // stopped while waiting: take nothing new
-		}
-		if err != nil { // e.g. Redis down: take nothing (fail closed) and try again later
-			w.failed(work, &failing, id, "waiting to process failed", err)
-			w.pause(stop)
-			continue
-		}
-
 		found, err := proc.ProcessNext(work)
-		if err != nil { // e.g. database down: wait, so we don't spin
-			w.failed(work, &failing, id, "processing failed", err)
+		if err != nil { // e.g. database or Redis down: wait, so we don't spin
+			w.failed(work, id, "processing failed", err)
 			w.pause(stop)
 			continue
 		}
-		w.succeeded(work, &failing)
-		if !found {
-			w.pause(stop) // empty queue; if found, more may be waiting, so go on at once
+		if found {
+			w.succeeded(work)
+			continue // more may be waiting: don't sleep while the queue is busy
 		}
+		// Empty queue. It doesn't end an outage: it shows the database works, not that a
+		// notification can be sent (e.g. Redis may still be down).
+		w.pause(stop)
 	}
 }
 
-// failed records a failed try of one loop. Only the first failure of an outage is logged as
-// an error; the retries that follow are logged at debug level.
-func (w *Worker) failed(ctx context.Context, failing *bool, id int, msg string, err error) {
+// failed records a failed try. Only the first failure of an outage is logged as an error; the
+// retries that follow, from any loop, are logged at debug level.
+func (w *Worker) failed(ctx context.Context, id int, msg string, err error) {
 	t := &w.trouble
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if !*failing {
-		*failing = true
-		t.failing++
-	}
-	if t.failures == 0 { // the outage starts
-		t.since = time.Now()
-		t.failures = 1
+	if !t.active { // the outage starts
+		t.active, t.since, t.failures = true, time.Now(), 1
 		w.logger.ErrorContext(ctx, msg, "loop", id, "error", err,
 			"retry_every", w.cfg.PollInterval.String(), "note", "retries are logged at debug level")
 		return
@@ -143,20 +127,15 @@ func (w *Worker) failed(ctx context.Context, failing *bool, id int, msg string, 
 	w.logger.DebugContext(ctx, msg, "loop", id, "error", err)
 }
 
-// succeeded records a successful try; once no loop is failing any more, the outage's end is logged.
-func (w *Worker) succeeded(ctx context.Context, failing *bool) {
-	if !*failing {
-		return
-	}
-	*failing = false
+// succeeded records a delivered notification, which ends an outage.
+func (w *Worker) succeeded(ctx context.Context) {
 	t := &w.trouble
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.failing--
-	if t.failing == 0 {
+	if t.active {
 		w.logger.InfoContext(ctx, "working again", "down_for", time.Since(t.since).Round(time.Millisecond).String(),
 			"failed_tries", t.failures)
-		t.failures = 0
+		t.active, t.failures = false, 0
 	}
 }
 

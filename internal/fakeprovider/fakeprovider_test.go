@@ -162,3 +162,69 @@ func TestReport(t *testing.T) {
 		}
 	})
 }
+
+// send posts one valid message of channel ch.
+func send(t *testing.T, p *Provider, ch string) {
+	t.Helper()
+	body := `{"to":"a","channel":"` + ch + `","content":"c"}`
+	p.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", strings.NewReader(body)))
+}
+
+// stats reads the measurements through the HTTP endpoint.
+func stats(t *testing.T, p *Provider) Stats {
+	t.Helper()
+	w := httptest.NewRecorder()
+	p.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, StatsPath, nil))
+	var s Stats
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &s) != nil {
+		t.Fatalf("GET %s = %d %s", StatsPath, w.Code, w.Body)
+	}
+	return s
+}
+
+// The busiest window is the most arrivals within any one second, wherever that second starts.
+func TestStats_BusiestWindow(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p := newTestProvider(Config{})
+		// sms at 0, 0.5, 0.9 s: 3 within one second. Then 1.2 s (0.5, 0.9, 1.2: still 3),
+		// and 2.5 s (alone).
+		for _, at := range []time.Duration{0, 500, 400, 300, 1300} {
+			time.Sleep(at * time.Millisecond)
+			send(t, p, "sms")
+		}
+		send(t, p, "email")
+
+		got := stats(t, p)
+		if got.Busiest["sms"] != 3 || got.Busiest["email"] != 1 || got.Received["sms"] != 5 {
+			t.Errorf("stats = %+v, want sms busiest 3 of 5 received, email busiest 1", got)
+		}
+	})
+}
+
+// A window is one second wide: arrivals exactly one second apart are in different windows.
+func TestStats_WindowIsOneSecond(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p := newTestProvider(Config{})
+		for range 4 {
+			send(t, p, "push")
+			time.Sleep(time.Second)
+		}
+		if got := stats(t, p).Busiest["push"]; got != 1 {
+			t.Errorf("busiest = %d, want 1 for sends exactly 1s apart", got)
+		}
+	})
+}
+
+func TestStats_Reset(t *testing.T) {
+	p := newTestProvider(Config{})
+	send(t, p, "sms")
+
+	w := httptest.NewRecorder()
+	p.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodDelete, StatsPath, nil))
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("DELETE status = %d, want 204", w.Code)
+	}
+	if got := stats(t, p); len(got.Received) != 0 || len(got.Busiest) != 0 {
+		t.Errorf("stats after reset = %+v, want empty", got)
+	}
+}

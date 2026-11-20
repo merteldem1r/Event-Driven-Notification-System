@@ -17,6 +17,11 @@ import (
 // maxResponseBytes caps how much of a response is read; the expected one is under 200 bytes.
 const maxResponseBytes = 64 << 10
 
+// maxIdleConns is how many open connections to the provider are kept for reuse. It must be at
+// least the number of sends at once (WORKER_CONCURRENCY x 3 channels), or the rest reconnect
+// for every message.
+const maxIdleConns = 1000
+
 // Message is one notification as the provider receives it.
 type Message struct {
 	ID            uuid.UUID // our notification ID, sent as Idempotency-Key
@@ -59,7 +64,12 @@ type Client struct {
 
 // NewClient returns a Client that gives each send at most timeout.
 func NewClient(url string, timeout time.Duration) *Client {
-	return &Client{url: url, timeout: timeout, http: &http.Client{}}
+	// Go keeps only 2 idle connections per host by default; with many loops sending at once,
+	// the others would open a new connection (and TLS handshake) for every message.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = maxIdleConns
+	transport.MaxIdleConnsPerHost = maxIdleConns
+	return &Client{url: url, timeout: timeout, http: &http.Client{Transport: transport}}
 }
 
 // request is the body the provider expects: {to, channel, content}.

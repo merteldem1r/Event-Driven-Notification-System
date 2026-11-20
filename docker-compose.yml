@@ -37,7 +37,10 @@ services:
     environment:
       LOG_LEVEL: info
       DATABASE_URL: postgres://notification:notification@postgres:5432/notification?sslmode=disable
-      REDIS_URL: redis://redis:6379/0 # shared rate limit, 100/s per channel by default (D15)
+      REDIS_URL: redis://redis:6379/0 # shared rate limit: 85/s per channel by default, under the provider's 100 (D17)
+      # Empty unless set in the shell or .env: then the defaults in internal/config apply.
+      RATE_LIMIT_PER_SECOND: ${RATE_LIMIT_PER_SECOND:-}
+      RATE_LIMIT_BURST: ${RATE_LIMIT_BURST:-}
       # The fake provider unless PROVIDER_URL is set (shell or .env).
       PROVIDER_URL: ${PROVIDER_URL:-http://fakeprovider:9090/}
     # docker stop sends SIGTERM and kills after this long. Longer than WORKER_SHUTDOWN_TIMEOUT (25s),

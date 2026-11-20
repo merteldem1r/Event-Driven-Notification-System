@@ -29,7 +29,7 @@ type Config struct {
 	ProviderTimeout time.Duration // limit for one send
 
 	RedisURL           string // Redis for the shared rate limiter; empty if unset
-	RateLimitPerSecond int    // sends per second per channel, for all workers together
+	RateLimitPerSecond int    // sends per second per channel, for all workers together; below the provider's limit (D17)
 	RateLimitBurst     int    // sends allowed at once after an idle moment
 }
 
@@ -107,12 +107,12 @@ func Load() (Config, error) {
 			return Config{}, errors.New("REDIS_URL must be a full redis:// URL, e.g. redis://localhost:6379/0")
 		}
 	}
-	perSecond, err := strconv.Atoi(getEnv("RATE_LIMIT_PER_SECOND", "100"))
+	perSecond, err := strconv.Atoi(getEnv("RATE_LIMIT_PER_SECOND", "85"))
 	if err != nil || perSecond < 1 || perSecond > MaxRateLimitPerSecond {
 		return Config{}, fmt.Errorf("RATE_LIMIT_PER_SECOND must be a number from 1 to %d", MaxRateLimitPerSecond)
 	}
 	// A burst above the rate would let more than the rate through in one second.
-	burst, err := strconv.Atoi(getEnv("RATE_LIMIT_BURST", "10"))
+	burst, err := strconv.Atoi(getEnv("RATE_LIMIT_BURST", "5"))
 	if err != nil || burst < 1 || burst > perSecond {
 		return Config{}, errors.New("RATE_LIMIT_BURST must be a number from 1 to RATE_LIMIT_PER_SECOND")
 	}

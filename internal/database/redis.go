@@ -14,6 +14,7 @@ func ConnectRedis(ctx context.Context, url string) (*redis.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse redis url: %w", err)
 	}
+	opts.ContextTimeoutEnabled = true // a context's deadline also ends a call stuck reading or writing
 	client := redis.NewClient(opts)
 
 	// NewClient doesn't connect yet; Ping makes sure Redis is reachable.

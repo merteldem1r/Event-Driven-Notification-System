@@ -202,8 +202,15 @@ func (r *Notifications) MarkFailed(ctx context.Context, id uuid.UUID, attempt in
 }
 
 // Release puts a notification back in the queue, e.g. when a send was interrupted by shutdown.
+// The attempt still counts: the provider may have received the message.
 func (r *Notifications) Release(ctx context.Context, id uuid.UUID, attempt int) (ok bool, _ error) {
 	return r.finish(ctx, id, attempt, `status = 'pending'`)
+}
+
+// Unclaim puts a notification back in the queue as if it had not been claimed: nothing was
+// sent (e.g. no rate-limit slot), so the attempt doesn't count.
+func (r *Notifications) Unclaim(ctx context.Context, id uuid.UUID, attempt int) (ok bool, _ error) {
+	return r.finish(ctx, id, attempt, `status = 'pending', attempts = attempts - 1`)
 }
 
 // finish applies set (with its extra parameters from $3) to the claimed notification and ends its lease.

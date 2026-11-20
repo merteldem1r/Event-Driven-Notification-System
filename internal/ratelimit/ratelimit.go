@@ -13,6 +13,10 @@ import (
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/domain"
 )
 
+// callTimeout bounds one question to Redis. It normally answers in about a millisecond, so no
+// answer by then means trouble: fail closed instead of holding the claimed notification.
+const callTimeout = time.Second
+
 // Limiter allows at most perSecond sends per channel, shared through Redis (D2, D15).
 type Limiter struct {
 	rl    *redis_rate.Limiter
@@ -33,8 +37,13 @@ func New(client *redis.Client, perSecond, burst int) *Limiter {
 func (l *Limiter) Wait(ctx context.Context, ch domain.Channel) error {
 	for {
 		// One atomic Lua script in Redis: check and take a slot together.
-		res, err := l.rl.Allow(ctx, key(ch), l.limit)
+		call, cancel := context.WithTimeout(ctx, callTimeout)
+		res, err := l.rl.Allow(call, key(ch), l.limit)
+		cancel()
 		if err != nil {
+			if ctx.Err() != nil { // our caller gave up, not Redis
+				return fmt.Errorf("wait for %s rate limit: %w", ch, ctx.Err())
+			}
 			return fmt.Errorf("rate limit %s: %w", ch, err)
 		}
 		if res.Allowed > 0 {

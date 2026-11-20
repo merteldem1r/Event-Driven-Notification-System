@@ -1,4 +1,4 @@
-.PHONY: hooks run-api run-worker run-fakeprovider test lint check up down infra-up logs migrate-up migrate-down
+.PHONY: hooks run-api run-worker run-fakeprovider loadtest test lint check up down infra-up logs migrate-up migrate-down
 
 # Same version as CI (.github/workflows/ci.yml). Change both together.
 GOLANGCI_LINT_VERSION := v2.15.0
@@ -55,6 +55,16 @@ migrate-up:
 ## migrate-down: roll back the last migration
 migrate-down:
 	docker compose run --rm migrate down 1
+
+## loadtest: start WORKERS workers (default 3) against the fake provider, send PER_CHANNEL
+## notifications (default 1000) on every channel at once, check the rate limit per channel
+WORKERS ?= 3
+PER_CHANNEL ?= 1000
+loadtest:
+	@# PROVIDER_URL is set here, so a load test never goes to webhook.site.
+	PROVIDER_URL=http://fakeprovider:9090/ docker compose up -d --build --wait --scale worker=$(WORKERS) api worker fakeprovider
+	go run ./cmd/loadtest -per-channel $(PER_CHANNEL)
+	@echo "The workers still send to the fake provider; 'docker compose up -d --scale worker=1 worker' returns to your .env setting."
 
 ## logs: follow the API, worker and fake provider container logs (Ctrl+C stops following, not the containers)
 logs:

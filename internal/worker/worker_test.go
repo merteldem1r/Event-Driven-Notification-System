@@ -18,38 +18,22 @@ import (
 var testConfig = Config{Concurrency: 1, PollInterval: 500 * time.Millisecond, ShutdownTimeout: 25 * time.Second}
 
 // fakeProcessor hands out `queue` notifications. If block is set, each call waits for it to be
-// closed (or for its context to end), like a slow provider call. Wait fails with waitErr, or
-// with waitBlock blocks until its context ends, like a rate limit with no free slot.
+// closed (or for its context to end), like a slow provider call.
 type fakeProcessor struct {
 	mu        sync.Mutex
 	queue     int
 	err       error
 	block     chan struct{}
-	waitErr   error
-	waitBlock bool
-	waits     int
 	calls     int
 	processed int
 	cancelled bool // a call saw its context end
 }
 
-func (f *fakeProcessor) Wait(ctx context.Context) error {
-	f.mu.Lock()
-	f.waits++
-	block, err := f.waitBlock, f.waitErr
-	f.mu.Unlock()
-	if block {
-		<-ctx.Done()
-		return ctx.Err()
-	}
-	return err
-}
-
-// setWaitErr changes what Wait returns, e.g. nil once "Redis is back".
-func (f *fakeProcessor) setWaitErr(err error) {
+// setErr changes what ProcessNext returns, e.g. nil once "Redis is back".
+func (f *fakeProcessor) setErr(err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.waitErr = err
+	f.err = err
 }
 
 // syncBuffer collects log output written by many loops at once.
@@ -110,13 +94,6 @@ func (f *fakeProcessor) ProcessNext(ctx context.Context) (bool, error) {
 	f.processed++
 	f.mu.Unlock()
 	return true, nil
-}
-
-// waitCount returns how often Wait was called.
-func (f *fakeProcessor) waitCount() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.waits
 }
 
 // snapshot returns the counters under the lock.
@@ -198,60 +175,10 @@ func TestRun_EachProcessorHasItsOwnLoops(t *testing.T) {
 	})
 }
 
-// A loop waiting for a rate-limit slot has taken nothing yet, so the stop signal ends the wait
-// at once and no notification is claimed afterwards.
-func TestRun_StopsWhileWaitingForASlot(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		proc := &fakeProcessor{queue: 5, waitBlock: true}
-		cancel, done := start(proc, testConfig)
-		synctest.Wait() // the loop is waiting for a slot
-
-		before := time.Now()
-		cancel()
-		if err := <-done; err != nil {
-			t.Fatalf("Run = %v, want nil", err)
-		}
-		if waited := time.Since(before); waited != 0 {
-			t.Errorf("stopping took %v, want no wait", waited)
-		}
-		if calls, _, _ := proc.snapshot(); calls != 0 {
-			t.Errorf("ProcessNext called %d times, want 0: nothing is taken without a slot", calls)
-		}
-	})
-}
-
-// If permission can't be checked (e.g. Redis down), nothing is taken (fail closed), and the
-// loop asks again once per poll interval instead of spinning.
-func TestRun_WaitErrorTakesNothing(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		proc := &fakeProcessor{queue: 5, waitErr: errors.New("redis down")}
-		cancel, done := start(proc, testConfig)
-		defer func() {
-			cancel()
-			if err := <-done; err != nil {
-				t.Errorf("Run = %v, want nil", err)
-			}
-		}()
-
-		synctest.Wait()
-		if n := proc.waitCount(); n != 1 {
-			t.Fatalf("Wait called %d times, want 1 before the poll interval", n)
-		}
-		time.Sleep(testConfig.PollInterval)
-		synctest.Wait()
-		if n := proc.waitCount(); n != 2 {
-			t.Errorf("Wait called %d times, want 2: one retry per interval", n)
-		}
-		if calls, _, _ := proc.snapshot(); calls != 0 {
-			t.Errorf("ProcessNext called %d times, want 0", calls)
-		}
-	})
-}
-
 // An outage is logged twice, when it starts and when it ends, not on every retry of every loop.
 func TestRun_LogsAnOutageOnceNotEveryRetry(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		proc := &fakeProcessor{waitErr: errors.New("redis down")}
+		proc := &fakeProcessor{queue: 5, err: errors.New("rate limit sms: redis down")}
 		var logs syncBuffer
 		cfg := testConfig
 		cfg.Concurrency = 3
@@ -261,8 +188,8 @@ func TestRun_LogsAnOutageOnceNotEveryRetry(t *testing.T) {
 
 		time.Sleep(10 * cfg.PollInterval) // 3 loops retry about 10 times each
 		synctest.Wait()
-		failedTries := proc.waitCount()
-		proc.setWaitErr(nil) // Redis is back
+		failedTries, _, _ := proc.snapshot()
+		proc.setErr(nil) // Redis is back
 		time.Sleep(cfg.PollInterval)
 		synctest.Wait()
 		cancel()
@@ -270,7 +197,7 @@ func TestRun_LogsAnOutageOnceNotEveryRetry(t *testing.T) {
 			t.Fatalf("Run = %v, want nil", err)
 		}
 
-		if got := logs.lines(t, "waiting to process failed"); len(got) != 1 {
+		if got := logs.lines(t, "processing failed"); len(got) != 1 {
 			t.Errorf("%d error lines, want 1 for the whole outage (of %d failed tries)", len(got), failedTries)
 		}
 		again := logs.lines(t, "working again")
@@ -283,6 +210,36 @@ func TestRun_LogsAnOutageOnceNotEveryRetry(t *testing.T) {
 		// The last failed retry was at 5 s; the next one, half a second later, works.
 		if again[0]["down_for"] != "5.5s" {
 			t.Errorf("down_for = %v, want 5.5s", again[0]["down_for"])
+		}
+	})
+}
+
+// An empty queue neither starts nor ends an outage: with one notification passed between
+// loops, a loop that failed and then finds the queue empty must not log "working again".
+func TestRun_EmptyQueueDoesNotEndAnOutage(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		failing := &fakeProcessor{queue: 1, err: errors.New("rate limit sms: redis down")}
+		idle := &fakeProcessor{} // always empty
+		var logs syncBuffer
+		cfg := testConfig
+		cfg.Concurrency = 2
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() {
+			done <- New([]Processor{failing, idle}, cfg, slog.New(slog.NewJSONHandler(&logs, nil))).Run(ctx)
+		}()
+
+		time.Sleep(5 * cfg.PollInterval)
+		synctest.Wait()
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatalf("Run = %v, want nil", err)
+		}
+		if got := logs.lines(t, "working again"); len(got) != 0 {
+			t.Errorf("%d \"working again\" lines while still failing, want 0", len(got))
+		}
+		if got := logs.lines(t, "processing failed"); len(got) != 1 {
+			t.Errorf("%d error lines, want 1", len(got))
 		}
 	})
 }

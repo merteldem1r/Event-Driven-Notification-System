@@ -29,10 +29,10 @@ func TestLoad(t *testing.T) {
 			c.ProviderTimeout = 5 * time.Second
 		}
 		if c.RateLimitPerSecond == 0 {
-			c.RateLimitPerSecond = 100
+			c.RateLimitPerSecond = 85
 		}
 		if c.RateLimitBurst == 0 {
-			c.RateLimitBurst = 10
+			c.RateLimitBurst = 5
 		}
 		return c
 	}
@@ -63,7 +63,7 @@ func TestLoad(t *testing.T) {
 				HTTPPort: 8080, LogLevel: slog.LevelInfo, DatabaseURL: dbURL,
 				WorkerConcurrency: 5, WorkerPollInterval: 2 * time.Second, WorkerShutdownTimeout: time.Minute,
 				WorkerLeaseDuration: 2 * time.Minute, ProviderTimeout: 5 * time.Second,
-				RateLimitPerSecond: 100, RateLimitBurst: 10,
+				RateLimitPerSecond: 85, RateLimitBurst: 5,
 			},
 		},
 		{

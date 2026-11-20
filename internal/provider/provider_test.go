@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -69,6 +72,43 @@ func TestSend_Accepted(t *testing.T) {
 	}
 	if c := got.Header.Get("X-Correlation-ID"); c != "order-1042" {
 		t.Errorf("X-Correlation-ID = %q, want order-1042", c)
+	}
+}
+
+// Many sends at once reuse their connections instead of opening a new one per message.
+func TestSend_ReusesConnections(t *testing.T) {
+	var opened atomic.Int64
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = io.WriteString(w, accepted) // the client side is what's under test
+	}))
+	srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			opened.Add(1)
+		}
+	}
+	srv.Start()
+	t.Cleanup(srv.Close)
+
+	const senders, each = 30, 20 // like 30 worker loops
+	client := NewClient(srv.URL, time.Second)
+	var wg sync.WaitGroup
+	for range senders {
+		wg.Go(func() {
+			for range each {
+				if _, err := client.Send(t.Context(), testMessage); err != nil {
+					t.Errorf("Send: %v", err)
+					return
+				}
+			}
+		})
+	}
+	wg.Wait()
+
+	// About one per sender (Go may open a few extra when a connection frees up while it dials);
+	// with Go's default of 2 kept per host it was 175 to 238.
+	if n := opened.Load(); n > 2*senders {
+		t.Errorf("%d connections opened for %d sends, want at most %d", n, senders*each, 2*senders)
 	}
 }
 
