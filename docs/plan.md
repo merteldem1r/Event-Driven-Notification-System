@@ -9,7 +9,7 @@ is tested. Then we stop, explain it, and the user commits it.
 
 Status: `[x]` done, `[ ]` not done. The next step is marked **(next)**.
 
-> **Current position:** Phase 6, step **6.5** (worker in docker-compose).
+> **Current position:** Phase 7, step **7.1** (Redis client and shared per-channel limiter).
 
 ---
 
@@ -63,18 +63,19 @@ Goal: the schema exists and Go code can read/write it, tested against a real Pos
 **Verify:** batch of 1,000 → `202`; batch status counts; list pages with filters; cancel → `cancelled`, too late → `409`.
 **Summary:** `docs/application/06-api-batch-list-cancel.md`.
 
-## Phase 6 · Worker: the end-to-end flow
+## Phase 6 · Worker: the end-to-end flow (done)
 - [x] 6.1 `cmd/worker` + `internal/worker`: N loops (`WORKER_CONCURRENCY`), idle polling (`WORKER_POLL_INTERVAL`), graceful shutdown on SIGINT/SIGTERM: stop taking work, let in-flight work finish within `WORKER_SHUTDOWN_TIMEOUT`, then cancel it; `make run-worker`
 - [x] 6.2 Claim with `FOR UPDATE SKIP LOCKED` (row becomes `processing`, attempts + 1, leased for `WORKER_LEASE_DURATION`); weighted priority 6:3:1 with fallback (D7); claim logs carry the API correlation ID (PROC-1, PROC-3, IMP-2, IMP-6)
 - [x] 6.3 Provider HTTP client (`internal/provider`): `POST {to, channel, content}`, reads `202 {messageId, status, timestamp}`, notification ID as `Idempotency-Key`, `PROVIDER_TIMEOUT`; `PROVIDER_URL` = your webhook.site URL (D9: webhook.site only for now) (PRV-1, PRV-2)
 - [x] 6.4 Send each claimed notification and record the result: `sent` + provider `messageId`, `failed` + `last_error` (retries come in Phase 8), or back to `pending` if shutdown cut the send off; recorded even during shutdown; only the claim's own attempt can record (fencing); worker requires `PROVIDER_URL` (RET-6, PRV-1, PRV-2)
-- [ ] 6.5 Worker service in docker-compose **(next)**
+- [x] 6.5 Worker service in docker-compose: one image with both programs (`entrypoint: /worker`), `PROVIDER_URL` from the shell or `.env`, `stop_grace_period: 30s`, scalable with `--scale worker=N`
 
 **Verify:** create a notification → a worker sends it → status becomes `sent`; request visible in webhook.site or mock.
+**Summary:** `docs/application/07-worker.md`.
 
 ## Phase 7 · Rate limiting
 - [ ] 7.0 (Optional, D9) Own local fake provider: a small HTTP server answering like webhook.site, with settings for latency and a failure rate; used when `PROVIDER_URL` is unset. Decide before 7.3, whose load test may exceed webhook.site's free request limit, and before Phase 8's failure tests
-- [ ] 7.1 Redis client + shared per-channel limiter (PROC-2)
+- [ ] 7.1 Redis client + shared per-channel limiter (PROC-2) **(next)**
 - [ ] 7.2 Worker waits for a token before each send
 - [ ] 7.3 Test with several workers: total stays ≤ 100/s per channel (IMP-1)
 

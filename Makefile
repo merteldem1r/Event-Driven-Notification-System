@@ -52,6 +52,6 @@ migrate-up:
 migrate-down:
 	docker compose run --rm migrate down 1
 
-## logs: follow the API container logs (Ctrl+C stops following, not the API)
+## logs: follow the API and worker container logs (Ctrl+C stops following, not the containers)
 logs:
-	docker compose logs -f api
+	docker compose logs -f api worker

@@ -1,5 +1,6 @@
 # Multi-stage build: compile in a big image that has Go, ship a tiny image
-# that contains only the compiled binary.
+# that contains only the compiled binaries. One image holds both programs;
+# it runs the API by default, and Compose starts the worker with entrypoint /worker.
 
 # ---- Stage 1: build ----
 FROM golang:1.25-alpine AS build
@@ -16,7 +17,8 @@ COPY . .
 # CGO_ENABLED=0  -> pure Go, statically linked binary (no C libraries needed at runtime)
 # -trimpath      -> no paths from the build machine inside the binary
 # -ldflags=-s -w -> strip debug symbols, smaller binary
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/api ./cmd/api
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/api ./cmd/api && \
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/worker ./cmd/worker
 
 # ---- Stage 2: run ----
 # distroless/static: no shell, no package manager, just CA certificates
@@ -24,6 +26,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/api ./cmd/api
 FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=build /out/api /api
+COPY --from=build /out/worker /worker
 
 # Documentation only: the port the API listens on (HTTP_PORT default).
 EXPOSE 8080

@@ -1,6 +1,10 @@
 # Local development stack.
-#   Whole system:          make up
+#   Whole system:          make up         (api + worker + postgres + redis + migrations)
 #   Only infrastructure:   make infra-up   (postgres + redis + migrations)
+#   More workers:          docker compose up -d --scale worker=3
+#
+# The worker needs PROVIDER_URL (your webhook.site URL, D9). Compose reads it from your shell
+# or from a .env file next to this file (gitignored):  PROVIDER_URL=https://webhook.site/<your-id>
 #
 # Credentials here are for local development only.
 
@@ -21,6 +25,24 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # Takes notifications from the queue and sends them. Same image as the API, other program.
+  worker:
+    build: .
+    entrypoint: ["/worker"]
+    environment:
+      LOG_LEVEL: info
+      DATABASE_URL: postgres://notification:notification@postgres:5432/notification?sslmode=disable
+      # Empty if unset: the worker then stops with a clear message, everything else still runs.
+      PROVIDER_URL: ${PROVIDER_URL:-}
+    # docker stop sends SIGTERM and kills after this long. Longer than WORKER_SHUTDOWN_TIMEOUT (25s),
+    # so in-flight sends can finish (the 10s default would cut them off).
+    stop_grace_period: 30s
+    depends_on:
+      postgres:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
