@@ -1,6 +1,6 @@
 module github.com/merteldem1r/Event-Driven-Notification-System
 
-go 1.26.0
+go 1.26.11
 
 require (
 	github.com/getkin/kin-openapi v0.153.0
