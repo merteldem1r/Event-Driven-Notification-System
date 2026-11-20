@@ -9,7 +9,7 @@ is tested. Then we stop, explain it, and the user commits it.
 
 Status: `[x]` done, `[ ]` not done. The next step is marked **(next)**.
 
-> **Current position:** optional features 10, 11 and 14 done. Next: decide on more (WebSocket, 12; a web UI is being built separately).
+> **Current position:** optional features 10, 11 and 14 done. Next: decide on more (WebSocket, 12). Web simulation (Phase 16): first version done, 16.2 deploy next.
 
 ---
 
@@ -134,6 +134,26 @@ Chosen: 10, 11 and 14, in that order (cheapest first, CI/CD last so it covers th
   `scripts/smoke.sh`); then the Docker image, built on every run and pushed to `ghcr.io` from `main`
   only. The scan found 31 reachable standard library vulnerabilities in Go 1.26.0: `go.mod` raised to
   1.26.11. `web/` left out of the Docker build. Summary: `docs/application/14-ci-cd.md`
+
+## Phase 16 · Web simulation (D24)
+A page in `web/` that shows the whole system working: every building block, the flow between
+them, and each notification's story. Runs in the browser, deployable on Vercel.
+
+- [x] 16.1 First version: Next.js + shadcn/ui + React Flow + Recharts in `web/`; the simulation
+  engine (`web/lib/sim`: rules ported from the Go code, GCRA limiter, event-driven worker loops,
+  leases and sweep, retries, scheduling, cancel) with 29 Vitest tests; the diagram with moving
+  dots, scenarios (send one, schedule, burst, batch and cancel, provider 503/400, Redis down, kill
+  a worker), settings named after the env variables, an inspector per notification, live charts
+  (arrivals per second against the limit of 100, queue depth), logs shaped like the service's;
+  background traffic; links like `/?scenario=burst`; light and dark; `web/README.md`
+- [x] 16.1a Performance and bug pass, tested in real Chrome: heaps for wake-ups and the queue,
+  counters instead of scans, forgetting old rows, sampled edge paths, narrow store subscriptions,
+  memoized charts and log lines, no blur or width transitions. Burst at 5x went from 6 to 60
+  frames per second. Fixed: worker kill button not clickable, outage logged many times when
+  Redis went down mid-send, recovery line lost from Problems on a busy log, zoom reset when
+  workers changed. 36 Vitest tests and a 57-step click-through of every control
+- [ ] 16.2 Deploy to Vercel (root directory `web/`) and link the page from the README **(next)**
+- [ ] 16.3 Improvements after a first look (guided tour, templates in the model, more scenarios)
 
 ## Phase 15 · Proof and polish (done)
 - [x] 15.1 Load test: burst proves the 100/s cap holds (IMP-9); done early in 7.4

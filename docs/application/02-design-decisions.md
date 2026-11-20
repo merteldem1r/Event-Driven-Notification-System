@@ -33,6 +33,7 @@
 | D21 | Scheduled notifications: storage and rules | Phase 10 (scheduling) | Decided: `scheduled_at` column; future only, at most 30 days; per batch item |
 | D22 | Templates: syntax, reference, lifecycle, variables | Phase 11 (templates) | Decided: `{{name}}` placeholders; by unique name; create, get, list only; missing variable 400, extras ignored |
 | D23 | CI/CD: image publishing and extra checks | Phase 14 (CI/CD) | Decided: build always, publish to GHCR from main after every check; govulncheck, migrations up/down/up, smoke test; no Dependabot |
+| D24 | A visual web page of the system: simulation or live | Phase 16 (web) | Decided: simulation in the browser, Next.js in `web/`, deployable on Vercel |
 
 **Why only D1–D3 now?** They decide *what the database schema looks like, how workers are
 written, and what runs in docker-compose*. Changing them later means rewriting a lot.
@@ -623,6 +624,27 @@ The scan paid off at once: `go.mod` said `go 1.26.0`, and CI installs exactly th
 CI built with a standard library that has 31 known vulnerabilities our code reaches (fixed in
 1.26.11). `go.mod` now says 1.26.11; the Docker build already used the latest 1.26 patch.
 
+## D24 — A visual web page of the system
+
+A page that shows every building block and every notification moving between them makes the
+design easy to follow for someone who has not run it. Two ways to feed it:
+
+- **Simulation.** The browser runs a model of the service with the same rules and defaults
+  (6:3:1 priority, GCRA at 85/s with burst 5, retries 10 s doubling to 10 min with jitter,
+  5 attempts, 60 s leases, the 10 s sweep). It needs no backend, so it can be a static site
+  that anyone opens from a link. It is a model, so it can drift from the Go code if the rules
+  change and nobody updates it.
+- **Live.** The page shows the real system. The existing endpoints give counts, not single
+  messages, so animating them needs an event stream from the API (OPT-4, WebSocket, or
+  Server-Sent Events). Hosting it means running PostgreSQL, Redis and the workers somewhere
+  public, which costs money and invites abuse of a public sender.
+
+Chosen: **simulation only, for now**, as a Next.js app in `web/` that prerenders to a static
+page and deploys on Vercel. The rules live in one file (`web/lib/sim/rules.ts`) that names the
+decision and the Go file each rule comes from, and tests check the same behavior the Go tests
+and the load test check. The page says plainly that it is a simulation and links to the real
+service. A live mode can be added later behind the same events.
+
 ---
 
 ## Resulting architecture
@@ -672,6 +694,7 @@ CI built with a standard library that has 31 known vulnerabilities our code reac
 | D21 | Scheduled notifications | **Optional `scheduled_at` (RFC 3339 with a time zone), stored in a new column; `next_attempt_at` starts there; must be in the future and at most 30 days ahead, otherwise `400`; per batch item** | A past time is usually a time zone mistake; the column keeps the requested time through retries and lets the delivery metric count from it | Clients wanting "now" leave the field out; no scheduling beyond 30 days | 2026-11-20 |
 | D22 | Templates | **`{{name}}` placeholders, by unique name; `POST`, `GET /api/v1/templates` and `GET /api/v1/templates/{name}` only (immutable); `template` + `variables` instead of `content`; rendered at creation; a missing variable is a `400`, extras are ignored; not tied to a channel** | Simple to explain and safe (no logic in templates); immutable templates can't break clients; the stored content is the final text | No conditions or loops; a new wording needs a new name | 2026-11-20 |
 | D23 | CI/CD | **Jobs in parallel: lint, tests, govulncheck, migrations up/down/up, smoke test (`make smoke`); then the Docker image, built on every run and published to `ghcr.io` from `main` only, tagged `sha-<commit>` and `latest`; no load test in CI; no Dependabot** | Every commit on main has a tested, ready-to-run image; the checks cover what unit tests can't (down migrations, the built image, known vulnerabilities) | Public image; dependencies updated by hand | 2026-11-20 |
+| D24 | Web page of the system | **A simulation in the browser** (`web/`, Next.js, static, Vercel); the same rules and defaults as the Go service, ported in one file with tests; a live mode later if wanted | Anyone can open it from a link; no backend to host or protect | It is a model, not the running service; it must be kept in step with the Go rules | 2026-11-20 |
 | D9 | Provider | **webhook.site only, for now**: the worker sends to `PROVIDER_URL` (your own webhook.site URL, set to answer `202 {messageId, status, timestamp}`); an own local fake provider is noted in the plan as an optional later step | Exactly the integration the requirements ask for; less code now; every send is visible in the browser | Offline runs; load tests beyond webhook.site's free request limit; a provider that fails or slows down on purpose for retry tests (until the fake is added) | 2026-11-20 |
 | D8 | Retry numbers | **5 attempts; waits start at 10 s and double, capped at 10 min; equal jitter (half to all of the wait); `Retry-After` used when longer, same cap**; then `failed` with the last error; `RETRY_MAX_ATTEMPTS`, `RETRY_BASE_DELAY`, `RETRY_MAX_DELAY` | Covers blips and short outages (~2.5 min in total) while messages are still useful; retries that failed together are spread out; never earlier than the provider asked, never parked for days | Long outages end in `failed` rather than waiting longer | 2026-11-20 |
 | D9 (revised) | Provider | **Own fake provider by default** (`cmd/fakeprovider`, `internal/fakeprovider`): answers `POST` on any path like webhook.site with `202 {messageId, status, timestamp}`; `FAKE_PROVIDER_LATENCY` (default 50ms) and `FAKE_PROVIDER_FAILURE_RATE` (share answered `503`); logs the messages received per channel each second; a Compose service the worker uses unless `PROVIDER_URL` is set (e.g. to webhook.site in `.env`) | Load tests at 100/s per channel without webhook.site's free request limit; provider failures on demand for Phase 8; works offline; the per-second report measures the rate limit | A second, simpler provider than the real one (no `429`, no `Retry-After` yet; added when Phase 8 needs them) | 2026-11-20 |
