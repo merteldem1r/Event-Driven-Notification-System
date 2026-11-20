@@ -22,6 +22,7 @@ type Config struct {
 	WorkerConcurrency     int           // notifications processed in parallel per worker process
 	WorkerPollInterval    time.Duration // idle wait before checking the queue again
 	WorkerShutdownTimeout time.Duration // time in-flight work gets after a stop signal
+	WorkerLeaseDuration   time.Duration // how long a claimed notification belongs to its worker
 }
 
 // MaxWorkerConcurrency caps WORKER_CONCURRENCY; more loops than this only add database load.
@@ -67,9 +68,15 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	lease, err := positiveDuration("WORKER_LEASE_DURATION", "60s") // final number is D8
+	if err != nil {
+		return Config{}, err
+	}
+
 	return Config{
 		HTTPPort: port, LogLevel: level, DatabaseURL: dbURL,
 		WorkerConcurrency: concurrency, WorkerPollInterval: poll, WorkerShutdownTimeout: shutdown,
+		WorkerLeaseDuration: lease,
 	}, nil
 }
 

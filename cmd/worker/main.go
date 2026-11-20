@@ -12,6 +12,7 @@ import (
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/config"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/database"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/logging"
+	"github.com/merteldem1r/Event-Driven-Notification-System/internal/repository"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/service"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/worker"
 )
@@ -54,7 +55,9 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	w := worker.New(service.NewDispatcher(), worker.Config{
+	// Wire the layers: repository (the queue) -> dispatcher -> worker loops.
+	dispatcher := service.NewDispatcher(repository.NewNotifications(db), cfg.WorkerLeaseDuration, logger)
+	w := worker.New(dispatcher, worker.Config{
 		Concurrency:     cfg.WorkerConcurrency,
 		PollInterval:    cfg.WorkerPollInterval,
 		ShutdownTimeout: cfg.WorkerShutdownTimeout,

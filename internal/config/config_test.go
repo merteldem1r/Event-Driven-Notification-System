@@ -22,6 +22,9 @@ func TestLoad(t *testing.T) {
 		if c.WorkerShutdownTimeout == 0 {
 			c.WorkerShutdownTimeout = 25 * time.Second
 		}
+		if c.WorkerLeaseDuration == 0 {
+			c.WorkerLeaseDuration = 60 * time.Second
+		}
 		return c
 	}
 
@@ -45,11 +48,12 @@ func TestLoad(t *testing.T) {
 			name: "custom worker values",
 			env: map[string]string{
 				"DATABASE_URL": dbURL, "WORKER_CONCURRENCY": "5",
-				"WORKER_POLL_INTERVAL": "2s", "WORKER_SHUTDOWN_TIMEOUT": "1m",
+				"WORKER_POLL_INTERVAL": "2s", "WORKER_SHUTDOWN_TIMEOUT": "1m", "WORKER_LEASE_DURATION": "2m",
 			},
 			want: Config{
 				HTTPPort: 8080, LogLevel: slog.LevelInfo, DatabaseURL: dbURL,
 				WorkerConcurrency: 5, WorkerPollInterval: 2 * time.Second, WorkerShutdownTimeout: time.Minute,
+				WorkerLeaseDuration: 2 * time.Minute,
 			},
 		},
 		{
@@ -99,7 +103,7 @@ func TestLoad(t *testing.T) {
 			// Start from a clean slate: empty values count as unset.
 			for _, key := range []string{
 				"HTTP_PORT", "LOG_LEVEL", "DATABASE_URL",
-				"WORKER_CONCURRENCY", "WORKER_POLL_INTERVAL", "WORKER_SHUTDOWN_TIMEOUT",
+				"WORKER_CONCURRENCY", "WORKER_POLL_INTERVAL", "WORKER_SHUTDOWN_TIMEOUT", "WORKER_LEASE_DURATION",
 			} {
 				t.Setenv(key, "")
 			}

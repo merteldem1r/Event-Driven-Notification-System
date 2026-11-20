@@ -16,7 +16,7 @@
 | D4 | Validation rules and content limits per channel | Phase 4 (create API) | Decided: see D4 below |
 | D5 | Batch validation: all-or-nothing vs partial | Phase 5 (batch API) | Decided: all-or-nothing |
 | D6 | Pagination: offset vs cursor | Phase 5 (list API) | Decided: cursor |
-| D7 | Priority strategy: strict vs weighted | Phase 6 (worker) | Later |
+| D7 | Priority strategy: strict vs weighted | Phase 6 (worker) | Decided: weighted 6:3:1 |
 | D8 | Retry numbers: attempts, delays, lease time | Phase 8 (retries) | Later |
 | D9 | Default provider in docker-compose: mock vs webhook.site | Phase 2/6 | Later |
 | D10 | Loading a local `.env.local` for development | Phase 2 | Decided: godotenv |
@@ -262,6 +262,24 @@ switches each off with `$n IS NULL OR ...`.
 
 ---
 
+## D7 — Priority strategy
+
+Workers must prefer `high`, but `low` must not wait forever while `high` keeps arriving (IMP-6).
+
+- **Strict:** always the highest priority waiting. Fastest for `high`, but `low` can starve.
+- **Weighted:** of every 10 claims, 6 try `high` first, 3 `normal`, 1 `low`; an empty preferred
+  queue falls back to the others, so no capacity is wasted.
+- **Strict with aging:** strict, but long-waiting rows count as `high`. Starvation is time-limited,
+  at the cost of another index and query.
+
+Chosen: **weighted 6:3:1**. The pattern is interleaved (`H N H H L H N H N H`) and shared by all
+loops of a worker process through an atomic counter. Each claim is one
+`UPDATE ... WHERE id = (SELECT ... WHERE priority = $1 ... FOR UPDATE SKIP LOCKED)` on the queue
+index, tried per priority in the claim's order. Measured with two worker processes on 100
+notifications of each priority: the first 160 claims were 96 high, 48 normal, 16 low.
+
+---
+
 ## D12 — Idempotency key
 
 Decided in Phase 4. **Problem:** a client can't tell a lost request from a lost response, so it
@@ -330,3 +348,4 @@ handled in Phase 8.
 | D12 | Idempotency key | **Optional `Idempotency-Key` header** (1 to 255 visible ASCII); repeat with the same request → original `202` + `Idempotent-Replayed: true`; repeat with a different request → `422 idempotency_key_reused`; key used while its row exists; `INSERT ... ON CONFLICT DO NOTHING` | Retries become safe for clients; key reuse bugs surface; the unique index makes it race-free across API instances | Key expiry and per-client scopes | 2026-11-20 |
 | D13 | Correlation ID | **`X-Correlation-ID` header**; a client ID of 1 to 128 characters `[A-Za-z0-9._:-]` is kept, anything else (missing, unsafe, too long) is replaced by a new UUID, never rejected; returned on every response, added to every log line through a slog handler wrapper, stored on the notification for the worker | One search finds every log line of a request, later across API and worker; the client's own ID links our logs to theirs; validation keeps log lines clean | W3C `traceparent` (comes with tracing, Phase 13) | 2026-11-20 |
 | D14 | Cancel | **`POST /api/v1/notifications/{id}/cancel`** → `200` with the notification; one conditional `UPDATE ... WHERE id = $1 AND status = 'pending'`; past pending → **`409 not_cancellable`** naming the status; already cancelled → **`200`** (safe to retry); the row is kept as `cancelled`; **batch cancel** `POST /api/v1/batches/{id}/cancel` cancels what is still pending and returns `cancelled` plus the counts, `0` is not an error | The check and the change are one statement, so cancel and a worker claim can't both win (tested: 200 races, and 50 over HTTP); an explicit action URL, since nothing is deleted; clients learn why a cancel came too late | Cancelling a notification that is already with the provider | 2026-11-20 |
+| D7 | Priority | **Weighted 6:3:1** with fallback: of every 10 claims 6 prefer `high`, 3 `normal`, 1 `low`; an empty preferred queue falls back to the others (high to low); claims use `FOR UPDATE SKIP LOCKED` per priority | `low` always moves (IMP-6); simple, predictable rule; full capacity is used whatever is waiting; weights are easy to tune | During a `high` burst, `high` gets ~60% of throughput instead of 100% | 2026-11-20 |

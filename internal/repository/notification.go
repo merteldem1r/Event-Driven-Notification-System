@@ -158,6 +158,35 @@ func (r *Notifications) GetByIdempotencyKey(ctx context.Context, key string) (do
 	return n, nil
 }
 
+// ClaimNext takes the next due notification of the given priority off the queue: it becomes
+// processing, its attempt count goes up, and it is leased to the caller for lease. ok is false
+// when nothing of that priority is due.
+func (r *Notifications) ClaimNext(ctx context.Context, p domain.Priority, lease time.Duration) (_ domain.Notification, ok bool, _ error) {
+	// SKIP LOCKED: a row another worker is claiming right now is skipped, not waited for, so
+	// concurrent claims get different rows. The inner query is served by the queue index.
+	row := r.db.QueryRow(ctx, `
+		UPDATE notifications
+		SET status = 'processing', attempts = attempts + 1,
+		    locked_until = now() + $2 * interval '1 millisecond', updated_at = now()
+		WHERE id = (
+			SELECT id FROM notifications
+			WHERE status = 'pending' AND priority = $1 AND next_attempt_at <= now()
+			ORDER BY next_attempt_at
+			LIMIT 1
+			FOR UPDATE SKIP LOCKED
+		)
+		RETURNING `+notificationColumns, p, lease.Milliseconds())
+
+	n, err := scanNotification(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Notification{}, false, nil
+	}
+	if err != nil {
+		return domain.Notification{}, false, fmt.Errorf("claim %s notification: %w", p, err)
+	}
+	return n, true, nil
+}
+
 // CancelPending cancels the notification only if it is still pending, in one statement,
 // so a worker claiming it at the same moment can't also win (IMP-4). ok is false when no
 // pending notification with this ID exists; the caller decides what that means.

@@ -721,3 +721,110 @@ func TestCancelPendingInBatch_RacesWorkerClaims(t *testing.T) {
 			cancelled, claimed.Load(), c, size)
 	}
 }
+
+// clearQueue takes earlier tests' pending rows out of the queue, since claims see the whole table.
+func clearQueue(t *testing.T) {
+	t.Helper()
+	if _, err := testDB.Exec(t.Context(), `UPDATE notifications SET status = 'cancelled' WHERE status = 'pending'`); err != nil {
+		t.Fatalf("clear queue: %v", err)
+	}
+}
+
+// insertQueued stores a notification with a chosen priority, due time and status.
+func insertQueued(t *testing.T, p domain.Priority, nextAttemptAt time.Time, status domain.Status) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	err := testDB.QueryRow(t.Context(), `
+		INSERT INTO notifications (channel, recipient, content, priority, status, next_attempt_at)
+		VALUES ('sms', 'r', 'c', $1, $2, $3) RETURNING id`, p, status, nextAttemptAt).Scan(&id)
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	return id
+}
+
+func TestClaimNext(t *testing.T) {
+	clearQueue(t)
+	repo := NewNotifications(testDB)
+	now := time.Now()
+
+	older := insertQueued(t, domain.PriorityHigh, now.Add(-2*time.Minute), domain.StatusPending)
+	newer := insertQueued(t, domain.PriorityHigh, now.Add(-time.Minute), domain.StatusPending)
+	insertQueued(t, domain.PriorityHigh, now.Add(time.Hour), domain.StatusPending) // not due yet
+	insertQueued(t, domain.PriorityHigh, now.Add(-time.Hour), domain.StatusSent)   // not pending
+	normal := insertQueued(t, domain.PriorityNormal, now.Add(-time.Hour), domain.StatusPending)
+
+	// High: oldest due first; the future and the sent rows are never taken.
+	for _, want := range []uuid.UUID{older, newer} {
+		n, ok, err := repo.ClaimNext(t.Context(), domain.PriorityHigh, time.Minute)
+		if err != nil || !ok || n.ID != want {
+			t.Fatalf("claim = %s, %v, %v; want %s", n.ID, ok, err, want)
+		}
+		if n.Status != domain.StatusProcessing || n.Attempts != 1 {
+			t.Errorf("claimed row: status %s, attempts %d; want processing, 1", n.Status, n.Attempts)
+		}
+	}
+	if _, ok, err := repo.ClaimNext(t.Context(), domain.PriorityHigh, time.Minute); err != nil || ok {
+		t.Errorf("third high claim: ok %v, err %v; want nothing due", ok, err)
+	}
+
+	// Each priority is its own queue.
+	if n, ok, _ := repo.ClaimNext(t.Context(), domain.PriorityNormal, time.Minute); !ok || n.ID != normal {
+		t.Errorf("normal claim = %s, %v; want %s", n.ID, ok, normal)
+	}
+
+	// The lease runs from the claim.
+	var leaseLeft time.Duration
+	if err := testDB.QueryRow(t.Context(),
+		`SELECT EXTRACT(EPOCH FROM locked_until - now()) * interval '1 second' FROM notifications WHERE id = $1`,
+		older).Scan(&leaseLeft); err != nil {
+		t.Fatalf("read lease: %v", err)
+	}
+	if leaseLeft < 50*time.Second || leaseLeft > time.Minute {
+		t.Errorf("lease left = %v, want just under 1m", leaseLeft)
+	}
+}
+
+// Many workers claiming at once never get the same notification (IMP-2).
+func TestClaimNext_ConcurrentClaimsNeverOverlap(t *testing.T) {
+	clearQueue(t)
+	repo := NewNotifications(testDB)
+	const size, workers = 100, 20
+	for range size {
+		insertQueued(t, domain.PriorityNormal, time.Now().Add(-time.Second), domain.StatusPending)
+	}
+
+	var mu sync.Mutex
+	claims := map[uuid.UUID]int{}
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Go(func() {
+			<-start
+			for {
+				n, ok, err := repo.ClaimNext(t.Context(), domain.PriorityNormal, time.Minute)
+				if err != nil {
+					t.Errorf("claim: %v", err)
+					return
+				}
+				if !ok {
+					return
+				}
+				mu.Lock()
+				claims[n.ID]++
+				mu.Unlock()
+			}
+		})
+	}
+	close(start)
+	wg.Wait()
+
+	if len(claims) != size {
+		t.Errorf("%d different notifications claimed, want %d", len(claims), size)
+	}
+	for id, times := range claims {
+		if times != 1 {
+			t.Errorf("notification %s claimed %d times", id, times)
+		}
+	}
+}
