@@ -55,6 +55,29 @@ func (e *Error) Error() string {
 // Unwrap gives access to the cause, e.g. context.DeadlineExceeded.
 func (e *Error) Unwrap() error { return e.Err }
 
+// Temporary reports whether sending the same message again may succeed (D18): no response
+// (timeout, network), 408, 429, 5xx, or a 2xx without a readable receipt. Everything else
+// (3xx, other 4xx) means the provider rejected the request, and a retry would fail the same way.
+func (e *Error) Temporary() bool {
+	switch {
+	case e.StatusCode == 0, e.StatusCode == http.StatusRequestTimeout, e.StatusCode == http.StatusTooManyRequests:
+		return true
+	case e.StatusCode >= 500:
+		return true
+	case e.StatusCode >= 200 && e.StatusCode <= 299: // accepted, but the receipt was unreadable
+		return true
+	default:
+		return false
+	}
+}
+
+// IsTemporary reports whether err is a provider error that a retry may fix. Any other error,
+// such as a request that can't be built, is permanent.
+func IsTemporary(err error) bool {
+	var pe *Error
+	return errors.As(err, &pe) && pe.Temporary()
+}
+
 // Client sends messages to the provider's URL.
 type Client struct {
 	url     string

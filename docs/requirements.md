@@ -36,7 +36,7 @@ Status values: **Done**, **Partial**, **Todo**.
 
 | ID | Requirement | Status | Phase | Notes |
 |---|---|---|---|---|
-| RET-1 | Classify errors: retry temporary ones (timeout, network, 5xx, 429), not permanent ones (4xx) | Todo | 8 | |
+| RET-1 | Classify errors: retry temporary ones (timeout, network, 5xx, 429), not permanent ones (4xx) | Partial | 8 | Classified by `provider.IsTemporary` (D18) and logged; retrying the temporary ones comes in 8.2 |
 | RET-2 | Exponential backoff with jitter between attempts | Todo | 8 | Numbers are decision D8 |
 | RET-3 | Max attempts, then mark `failed` and keep the last error | Todo | 8 | |
 | RET-4 | Respect `Retry-After` from the provider | Todo | 8 | |

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -131,29 +132,67 @@ func TestSend_WithoutCorrelationID(t *testing.T) {
 	}
 }
 
+// Every failed answer is an *Error with its status, classified as temporary or not (D18).
 func TestSend_Failures(t *testing.T) {
 	tests := []struct {
-		name       string
-		status     int
-		body       string
-		wantStatus int
+		name          string
+		status        int
+		body          string
+		wantTemporary bool
 	}{
-		{"provider down", http.StatusServiceUnavailable, "", 503},
-		{"too many requests", http.StatusTooManyRequests, "", 429},
-		{"bad request", http.StatusBadRequest, `{"error":"bad"}`, 400},
-		{"accepted without messageId", http.StatusAccepted, `{"status":"accepted"}`, 202},
-		{"accepted with non-JSON body", http.StatusAccepted, "OK", 202},
-		{"redirect not followed to a 2xx", http.StatusNotModified, "", 304},
+		{"server error", http.StatusInternalServerError, "", true},
+		{"bad gateway", http.StatusBadGateway, "", true},
+		{"provider down", http.StatusServiceUnavailable, "", true},
+		{"too many requests", http.StatusTooManyRequests, "", true},
+		{"request timeout", http.StatusRequestTimeout, "", true},
+		{"accepted without messageId", http.StatusAccepted, `{"status":"accepted"}`, true},
+		{"accepted with non-JSON body", http.StatusAccepted, "OK", true},
+		{"bad request", http.StatusBadRequest, `{"error":"bad"}`, false},
+		{"unauthorized", http.StatusUnauthorized, "", false},
+		{"not found", http.StatusNotFound, "", false},
+		{"unprocessable", http.StatusUnprocessableEntity, "", false},
+		{"redirect not followed to a 2xx", http.StatusNotModified, "", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := serve(t, tt.status, tt.body)
 			_, err := NewClient(srv.URL, time.Second).Send(t.Context(), testMessage)
 			var pe *Error
-			if !errors.As(err, &pe) || pe.StatusCode != tt.wantStatus {
-				t.Errorf("err = %v, want a provider *Error with status %d", err, tt.wantStatus)
+			if !errors.As(err, &pe) || pe.StatusCode != tt.status {
+				t.Fatalf("err = %v, want a provider *Error with status %d", err, tt.status)
+			}
+			if got := IsTemporary(err); got != tt.wantTemporary {
+				t.Errorf("IsTemporary = %v, want %v", got, tt.wantTemporary)
 			}
 		})
+	}
+}
+
+// Only provider errors can be temporary, also when wrapped; our own errors are permanent.
+func TestIsTemporary(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"wrapped provider error", fmt.Errorf("send: %w", &Error{StatusCode: 503, Err: errors.New("down")}), true},
+		{"other error", errors.New("provider: encode request: bad"), false},
+		{"no error", nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsTemporary(tt.err); got != tt.want {
+				t.Errorf("IsTemporary(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+// A provider URL that can't be used is our mistake: retrying can't fix it.
+func TestSend_BadURLIsPermanent(t *testing.T) {
+	_, err := NewClient("http://bad host/", time.Second).Send(t.Context(), testMessage)
+	if err == nil || IsTemporary(err) {
+		t.Errorf("err = %v (temporary %v), want a permanent error", err, IsTemporary(err))
 	}
 }
 
@@ -177,8 +216,8 @@ func TestSend_Timeout(t *testing.T) {
 	start := time.Now()
 	_, err := NewClient(srv.URL, 50*time.Millisecond).Send(t.Context(), testMessage)
 	var pe *Error
-	if !errors.As(err, &pe) || pe.StatusCode != 0 || !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("err = %v, want a provider *Error without status, caused by the deadline", err)
+	if !errors.As(err, &pe) || pe.StatusCode != 0 || !errors.Is(err, context.DeadlineExceeded) || !IsTemporary(err) {
+		t.Errorf("err = %v, want a temporary provider *Error without status, caused by the deadline", err)
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Errorf("Send took %v, want about the 50ms timeout", elapsed)
@@ -192,8 +231,8 @@ func TestSend_NoConnection(t *testing.T) {
 
 	_, err := NewClient(url, time.Second).Send(t.Context(), testMessage)
 	var pe *Error
-	if !errors.As(err, &pe) || pe.StatusCode != 0 {
-		t.Errorf("err = %v, want a provider *Error without status", err)
+	if !errors.As(err, &pe) || pe.StatusCode != 0 || !IsTemporary(err) {
+		t.Errorf("err = %v, want a temporary provider *Error without status", err)
 	}
 }
 

@@ -27,6 +27,7 @@
 | D15 | Rate limiter details: algorithm, burst, Redis down | Phase 7 (rate limiting) | Decided: GCRA via `redis_rate`, burst 5, fail closed |
 | D16 | When a worker asks the limiter: after or before claiming | Phase 7 (rate limiting) | Decided: loops per channel; claim, then slot, then send (revised in 7.4) |
 | D17 | What "max 100 per second" means, and the headroom | Phase 7 (load test) | Decided: at most 100 at the provider in any one second; send at 85/s, burst 5 |
+| D18 | Which provider errors are worth retrying | Phase 8 (retries) | Decided: no response, 408, 429, 5xx, and 2xx without a receipt; not 3xx or other 4xx |
 
 **Why only D1–D3 now?** They decide *what the database schema looks like, how workers are
 written, and what runs in docker-compose*. Changing them later means rewriting a lot.
@@ -421,6 +422,28 @@ provider the margin may be tuned with `RATE_LIMIT_PER_SECOND` once its own count
 
 ---
 
+## D18 — Which provider errors are worth retrying
+
+RET-1 asks to retry temporary failures (timeout, network, 5xx, 429) and not permanent ones
+(4xx). A few answers needed a choice:
+
+| Answer | Temporary? | Why |
+|---|---|---|
+| No response (timeout, connection refused, connection reset) | Yes | The provider or the network had a moment; the message itself is fine |
+| `5xx` | Yes | The provider's own problem |
+| `429 Too Many Requests` | Yes | The provider asks us to slow down. Our limiter should prevent it (D17), so it also hints that someone else shares the account or the provider counts differently |
+| `408 Request Timeout` | Yes | The provider says the request was too slow, not wrong |
+| `2xx` without a readable `messageId` | Yes, chosen | Usually a cut-off or garbled answer, so a retry likely gets a proper receipt. Sending again could deliver twice, but each retry carries the same `Idempotency-Key`, so a provider that honours it ignores the repeat. A provider that always answers this way is stopped by max attempts (8.3). The alternative, permanent, avoids any duplicate but marks a probably delivered message as failed |
+| Other `4xx` (`400`, `401`, `403`, `404`, `422`, ...) | No | The provider rejected the request; the same request fails the same way |
+| `3xx` (a redirect Go didn't follow) | No | A wrong `PROVIDER_URL`: a retry can't fix configuration |
+| Errors before sending (request can't be built) | No | Our own bug or configuration |
+
+The provider client decides it (`provider.IsTemporary`), since only it knows HTTP. A cut-off by
+shutdown is handled before this: it isn't a failure, and the notification goes back to the
+queue (Phase 6).
+
+---
+
 ## Resulting architecture
 
 ```
@@ -462,5 +485,6 @@ provider the margin may be tuned with `RATE_LIMIT_PER_SECOND` once its own count
 | D15 | Rate limiter details | **`go-redis/redis_rate` (GCRA in one Lua script), one key per channel, burst 5, fail closed**; `Wait` sleeps for the time Redis says the next slot opens, then asks again; each Redis call has a 1 s deadline; settings `RATE_LIMIT_PER_SECOND`, `RATE_LIMIT_BURST` | Atomic and correct across processes; Redis's clock, not the workers'; burst 5 absorbs loops being a little late for their slot (burst 1 lost ~10% of the slots); never exceeding the provider's limit matters more than sending during a Redis outage | Own algorithm code; sending while Redis is down; up to 5 extra sends in the first second after a quiet moment | 2026-11-20 |
 | D16 | Worker and rate limit | **Loops per channel; claim that channel, then wait for a slot, then send** (first slot-before-claim, revised after the load test); `WORKER_CONCURRENCY` = loops per channel (default 10); claim filtered by channel on index `(channel, priority, next_attempt_at)`; no slot or shutdown during the wait → `Unclaim` (back to `pending`, attempt not counted); Redis health on the worker (Phase 9), not the API | A backlog on one channel never holds up the others; nothing slow (database pauses) between permission and request, so arrivals stay even; a Redis outage uses no attempts; idle loops take no slots | Priority across channels (D7 works within a channel); a claimed notification holds its lease while waiting for its slot (a fraction of a second); a new index | 2026-11-20 |
 | D17 | Meaning of "max 100/s" | **At most 100 per channel at the provider in any one-second window**; workers send at **85/s with burst 5** (at most 90 allowed); provider client keeps up to 1,000 idle connections; the fake provider measures the busiest window at arrival (`GET /_stats`) and `make loadtest` fails above 100 | The strict reading, judged where it matters; measured 90 to 93 with 3 and 5 workers | About 15% of the top speed (85 instead of 100 per second per channel) | 2026-11-20 |
+| D18 | Provider errors worth retrying | **Temporary: no response, `408`, `429`, `5xx`, `2xx` without a `messageId`; permanent: `3xx`, other `4xx`, errors before sending**; decided by `provider.IsTemporary` | Retries only where they can help; a garbled receipt is retried with the same `Idempotency-Key` | A possible duplicate from a provider that ignores `Idempotency-Key` and sends a broken receipt | 2026-11-20 |
 | D9 | Provider | **webhook.site only, for now**: the worker sends to `PROVIDER_URL` (your own webhook.site URL, set to answer `202 {messageId, status, timestamp}`); an own local fake provider is noted in the plan as an optional later step | Exactly the integration the requirements ask for; less code now; every send is visible in the browser | Offline runs; load tests beyond webhook.site's free request limit; a provider that fails or slows down on purpose for retry tests (until the fake is added) | 2026-11-20 |
 | D9 (revised) | Provider | **Own fake provider by default** (`cmd/fakeprovider`, `internal/fakeprovider`): answers `POST` on any path like webhook.site with `202 {messageId, status, timestamp}`; `FAKE_PROVIDER_LATENCY` (default 50ms) and `FAKE_PROVIDER_FAILURE_RATE` (share answered `503`); logs the messages received per channel each second; a Compose service the worker uses unless `PROVIDER_URL` is set (e.g. to webhook.site in `.env`) | Load tests at 100/s per channel without webhook.site's free request limit; provider failures on demand for Phase 8; works offline; the per-second report measures the rate limit | A second, simpler provider than the real one (no `429`, no `Retry-After` yet; added when Phase 8 needs them) | 2026-11-20 |

@@ -125,9 +125,10 @@ func (d *Dispatcher) deliver(ctx context.Context, n domain.Notification) error {
 		recorded, err = d.queue.Release(rec, n.ID, n.Attempts)
 		log.WarnContext(ctx, "send cut off by shutdown, notification back in the queue", "duration_ms", took)
 	default:
-		// Final for now; Phase 8 retries with backoff instead.
+		// Final for now; 8.2 retries temporary errors with backoff instead.
 		recorded, err = d.queue.MarkFailed(rec, n.ID, n.Attempts, sendErr.Error())
-		log.WarnContext(ctx, "notification failed", "error", sendErr, "duration_ms", took)
+		log.WarnContext(ctx, "notification failed", "error", sendErr, "temporary", provider.IsTemporary(sendErr),
+			"duration_ms", took)
 	}
 	if err != nil {
 		return fmt.Errorf("record result: %w", err)

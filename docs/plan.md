@@ -9,7 +9,7 @@ is tested. Then we stop, explain it, and the user commits it.
 
 Status: `[x]` done, `[ ]` not done. The next step is marked **(next)**.
 
-> **Current position:** Phase 8, step **8.1** (classify provider errors).
+> **Current position:** Phase 8, step **8.2** (backoff with jitter, `Retry-After`; decide D8).
 
 ---
 
@@ -85,8 +85,8 @@ Goal: the schema exists and Go code can read/write it, tested against a real Pos
 **Summary:** `docs/application/08-rate-limiting.md`.
 
 ## Phase 8 · Retries and failure handling
-- [ ] 8.1 Classify provider errors (RET-1) **(next)**
-- [ ] 8.2 Backoff + jitter via `next_attempt_at`; respect `Retry-After` (decide D8) (RET-2, RET-4)
+- [x] 8.1 Classify provider errors (D18): `provider.IsTemporary` says temporary for no response, `408`, `429`, `5xx` and a `2xx` without a `messageId`, permanent for `3xx`, other `4xx` and errors before sending; the worker logs `temporary` with each failure (still final until 8.2) (RET-1)
+- [ ] 8.2 Backoff + jitter via `next_attempt_at`; respect `Retry-After` (decide D8) (RET-2, RET-4) **(next)**
 - [ ] 8.3 Max attempts → `failed` with last error (RET-3)
 - [ ] 8.4 Lease expiry recovers stuck jobs (RET-5)
 - [ ] 8.5 Re-queue endpoint for failed notifications; circuit breaker (OPT-1)

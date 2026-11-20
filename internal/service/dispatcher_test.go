@@ -1,7 +1,9 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"testing"
@@ -312,14 +314,42 @@ func TestDeliver_MapsTheNotification(t *testing.T) {
 	}
 }
 
+// A provider failure is recorded with its error, and the log says whether it is temporary.
 func TestDeliver_Failed(t *testing.T) {
-	q := oneDue()
-	s := &fakeSender{err: &provider.Error{StatusCode: 503, Err: errors.New("Service Unavailable")}}
-	if _, err := NewDispatcher(domain.ChannelSMS, q, s, &fakeLimiter{}, time.Minute, slog.New(slog.DiscardHandler)).ProcessNext(t.Context()); err != nil {
-		t.Fatalf("ProcessNext: %v (a provider failure is recorded, not returned)", err)
+	tests := []struct {
+		name          string
+		err           error
+		wantResult    string
+		wantTemporary bool
+	}{
+		{"provider down", &provider.Error{StatusCode: 503, Err: errors.New("Service Unavailable")},
+			"failed:provider: status 503: Service Unavailable", true},
+		{"rejected", &provider.Error{StatusCode: 400, Err: errors.New("Bad Request")},
+			"failed:provider: status 400: Bad Request", false},
 	}
-	if len(q.results) != 1 || q.results[0] != "failed:provider: status 503: Service Unavailable" {
-		t.Errorf("results = %v, want failed with the error", q.results)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			q := oneDue()
+			var logs bytes.Buffer
+			d := NewDispatcher(domain.ChannelSMS, q, &fakeSender{err: tt.err}, &fakeLimiter{}, time.Minute,
+				slog.New(slog.NewJSONHandler(&logs, nil)))
+			if _, err := d.ProcessNext(t.Context()); err != nil {
+				t.Fatalf("ProcessNext: %v (a provider failure is recorded, not returned)", err)
+			}
+			if len(q.results) != 1 || q.results[0] != tt.wantResult {
+				t.Errorf("results = %v, want [%s]", q.results, tt.wantResult)
+			}
+			var line struct {
+				Msg       string `json:"msg"`
+				Temporary *bool  `json:"temporary"`
+			}
+			if err := json.Unmarshal(logs.Bytes(), &line); err != nil {
+				t.Fatalf("log %q: %v", logs.String(), err)
+			}
+			if line.Msg != "notification failed" || line.Temporary == nil || *line.Temporary != tt.wantTemporary {
+				t.Errorf("log = %s, want \"notification failed\" with temporary=%v", logs.String(), tt.wantTemporary)
+			}
+		})
 	}
 }
 
