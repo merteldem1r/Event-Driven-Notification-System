@@ -20,6 +20,7 @@ type Config struct {
 	LogLevel    slog.Level
 	DatabaseURL string
 
+	WorkerHTTPPort        int           // the worker's /health and /metrics
 	WorkerConcurrency     int           // loops per channel in each worker process
 	WorkerPollInterval    time.Duration // idle wait before checking the queue again
 	WorkerShutdownTimeout time.Duration // time in-flight work gets after a stop signal
@@ -73,6 +74,11 @@ func Load() (Config, error) {
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
 		return Config{}, errors.New("DATABASE_URL is required")
+	}
+
+	workerPort, err := strconv.Atoi(getEnv("WORKER_HTTP_PORT", "8081"))
+	if err != nil || workerPort < 1 || workerPort > 65535 {
+		return Config{}, errors.New("WORKER_HTTP_PORT must be a port number from 1 to 65535")
 	}
 
 	concurrency, err := strconv.Atoi(getEnv("WORKER_CONCURRENCY", "10"))
@@ -148,7 +154,7 @@ func Load() (Config, error) {
 
 	return Config{
 		HTTPPort: port, LogLevel: level, DatabaseURL: dbURL,
-		WorkerConcurrency: concurrency, WorkerPollInterval: poll, WorkerShutdownTimeout: shutdown,
+		WorkerHTTPPort: workerPort, WorkerConcurrency: concurrency, WorkerPollInterval: poll, WorkerShutdownTimeout: shutdown,
 		WorkerLeaseDuration: lease, WorkerRecoverInterval: recoverEvery,
 		ProviderURL: providerURL, ProviderTimeout: providerTimeout,
 		RetryMaxAttempts: maxAttempts, RetryBaseDelay: retryBase, RetryMaxDelay: retryMax,

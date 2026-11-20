@@ -25,6 +25,14 @@ type Queue interface {
 	Unclaim(ctx context.Context, id uuid.UUID, attempt int) (ok bool, _ error)
 }
 
+// Recorder receives what happened to each send, for metrics (D20).
+type Recorder interface {
+	// SendDone records one provider call: how it ended and how long the provider took.
+	SendDone(ch domain.Channel, result domain.SendResult, took time.Duration)
+	// Delivered records the time from creating a notification to it being sent.
+	Delivered(ch domain.Channel, sinceCreated time.Duration)
+}
+
 // Retries decides what follows a temporary failure (D8): after failed attempt number attempt,
 // wait that long and try again (retryAfter is the provider's own wait, 0 if none), or stop
 // with ok false when no attempts are left.
@@ -61,6 +69,7 @@ type Dispatcher struct {
 	sender  Sender
 	limiter Limiter
 	retries Retries
+	metrics Recorder
 	lease   time.Duration
 	logger  *slog.Logger
 	turn    atomic.Uint64 // position in claimPattern, shared by this channel's worker loops
@@ -68,11 +77,14 @@ type Dispatcher struct {
 
 // NewDispatcher returns a Dispatcher for channel ch that leases each claimed notification for
 // lease, waits for a slot of limiter, sends it through sender, and retries temporary failures
-// as retries says.
+// as retries says. Every send is reported to metrics.
 func NewDispatcher(ch domain.Channel, queue Queue, sender Sender, limiter Limiter, retries Retries,
-	lease time.Duration, logger *slog.Logger,
+	metrics Recorder, lease time.Duration, logger *slog.Logger,
 ) *Dispatcher {
-	return &Dispatcher{channel: ch, queue: queue, sender: sender, limiter: limiter, retries: retries, lease: lease, logger: logger}
+	return &Dispatcher{
+		channel: ch, queue: queue, sender: sender, limiter: limiter, retries: retries,
+		metrics: metrics, lease: lease, logger: logger,
+	}
 }
 
 // ProcessNext takes the next notification of the channel and delivers it; found is false if
@@ -121,7 +133,7 @@ func (d *Dispatcher) deliver(ctx context.Context, n domain.Notification) error {
 
 	start := time.Now()
 	receipt, sendErr := d.sender.Send(ctx, toMessage(n))
-	took := time.Since(start).Milliseconds()
+	took := time.Since(start)
 
 	// Record even if shutdown cancels ctx now: a send that isn't recorded as sent would be sent again.
 	rec, cancel := recordContext(ctx)
@@ -131,11 +143,14 @@ func (d *Dispatcher) deliver(ctx context.Context, n domain.Notification) error {
 	var err error
 	switch {
 	case sendErr == nil:
+		d.metrics.SendDone(n.Channel, domain.SendSent, took)
+		d.metrics.Delivered(n.Channel, time.Since(n.CreatedAt))
 		recorded, err = d.queue.MarkSent(rec, n.ID, n.Attempts, receipt.MessageID)
-		log.InfoContext(ctx, "notification sent", "provider_message_id", receipt.MessageID, "duration_ms", took)
+		log.InfoContext(ctx, "notification sent", "provider_message_id", receipt.MessageID, "duration_ms", took.Milliseconds())
 	case ctx.Err() != nil: // we gave up at the shutdown deadline; the provider didn't fail
+		d.metrics.SendDone(n.Channel, domain.SendInterrupted, took)
 		recorded, err = d.queue.Release(rec, n.ID, n.Attempts)
-		log.WarnContext(ctx, "send cut off by shutdown, notification back in the queue", "duration_ms", took)
+		log.WarnContext(ctx, "send cut off by shutdown, notification back in the queue", "duration_ms", took.Milliseconds())
 	default:
 		recorded, err = d.failed(ctx, rec, log, n, sendErr, took)
 	}
@@ -150,21 +165,23 @@ func (d *Dispatcher) deliver(ctx context.Context, n domain.Notification) error {
 
 // failed records a failed send: back to the queue for a later attempt if the error is
 // temporary (D18) and attempts are left (D8), otherwise final with the last error (RET-3).
-func (d *Dispatcher) failed(ctx, rec context.Context, log *slog.Logger, n domain.Notification, sendErr error, took int64) (bool, error) {
+func (d *Dispatcher) failed(ctx, rec context.Context, log *slog.Logger, n domain.Notification, sendErr error, took time.Duration) (bool, error) {
 	temporary := provider.IsTemporary(sendErr)
 	if temporary {
 		if wait, ok := d.retries.Next(n.Attempts, provider.RetryAfter(sendErr)); ok {
+			d.metrics.SendDone(n.Channel, domain.SendRetry, took)
 			log.WarnContext(ctx, "notification failed, will retry", "error", sendErr, "temporary", true,
-				"retry_in", wait.Round(time.Millisecond).String(), "duration_ms", took)
+				"retry_in", wait.Round(time.Millisecond).String(), "duration_ms", took.Milliseconds())
 			return d.queue.Retry(rec, n.ID, n.Attempts, sendErr.Error(), wait)
 		}
 	}
+	d.metrics.SendDone(n.Channel, domain.SendFailed, took)
 	reason := "rejected by the provider" // a retry would fail the same way
 	if temporary {
 		reason = "no attempts left"
 	}
 	log.WarnContext(ctx, "notification failed", "error", sendErr, "temporary", temporary, "reason", reason,
-		"duration_ms", took)
+		"duration_ms", took.Milliseconds())
 	return d.queue.MarkFailed(rec, n.ID, n.Attempts, sendErr.Error())
 }
 

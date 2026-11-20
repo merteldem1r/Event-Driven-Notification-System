@@ -351,3 +351,19 @@ type QueueStat struct {
 	Count     int64
 	OldestDue time.Duration // pending only: how long the oldest due one has waited; 0 if none is due
 }
+
+// SendResult is how one send attempt ended, for metrics (D20).
+type SendResult string
+
+// The ways a send attempt can end.
+const (
+	SendSent        SendResult = "sent"        // accepted by the provider
+	SendRetry       SendResult = "retry"       // failed temporarily, tried again later
+	SendFailed      SendResult = "failed"      // failed for good: rejected, or no attempts left
+	SendInterrupted SendResult = "interrupted" // cut off by shutdown, back in the queue
+)
+
+// SendResults returns every SendResult.
+func SendResults() []SendResult {
+	return []SendResult{SendSent, SendRetry, SendFailed, SendInterrupted}
+}

@@ -4,7 +4,10 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -15,7 +18,9 @@ import (
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/config"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/database"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/domain"
+	"github.com/merteldem1r/Event-Driven-Notification-System/internal/handler"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/logging"
+	"github.com/merteldem1r/Event-Driven-Notification-System/internal/metrics"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/provider"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/ratelimit"
 	"github.com/merteldem1r/Event-Driven-Notification-System/internal/repository"
@@ -87,18 +92,59 @@ func run() error {
 	sender := provider.NewClient(cfg.ProviderURL, cfg.ProviderTimeout)
 	limiter := ratelimit.New(rdb, cfg.RateLimitPerSecond, cfg.RateLimitBurst)
 	retries := retry.New(cfg.RetryMaxAttempts, cfg.RetryBaseDelay, cfg.RetryMaxDelay)
+	reg := metrics.NewRegistry()
+	sends := metrics.NewSends(reg) // every send's result and duration (D20)
 	var dispatchers []worker.Processor
 	for _, ch := range domain.Channels() {
 		dispatchers = append(dispatchers,
-			service.NewDispatcher(ch, queue, sender, limiter, retries, cfg.WorkerLeaseDuration, logger))
+			service.NewDispatcher(ch, queue, sender, limiter, retries, sends, cfg.WorkerLeaseDuration, logger))
 	}
 	slog.Info("rate limit per channel", "per_second", cfg.RateLimitPerSecond, "burst", cfg.RateLimitBurst)
 	slog.Info("retries", "max_attempts", cfg.RetryMaxAttempts, "base_delay", cfg.RetryBaseDelay.String(), "max_delay", cfg.RetryMaxDelay.String())
-	w := worker.New(dispatchers, queue, worker.Config{
+	w := worker.New(dispatchers, sends.CountRecovered(queue), worker.Config{
 		Concurrency:     cfg.WorkerConcurrency,
 		PollInterval:    cfg.WorkerPollInterval,
 		ShutdownTimeout: cfg.WorkerShutdownTimeout,
 		RecoverInterval: cfg.WorkerRecoverInterval,
 	}, logger)
-	return w.Run(ctx)
+
+	// /health checks both dependencies the worker needs; /metrics serves reg (OBS-4, D16).
+	checks := map[string]handler.Pinger{"database": db, "redis": database.RedisPinger{Client: rdb}}
+	srv, err := serveOps(ctx, cfg.WorkerHTTPPort, handler.NewOpsRouter(logger, checks, reg))
+	if err != nil {
+		return err
+	}
+
+	runErr := w.Run(ctx)
+
+	// The loops have stopped; now stop answering health checks and scrapes too.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		slog.Warn("stop health and metrics server", "error", err)
+	}
+	return runErr
+}
+
+// serveOps starts the worker's HTTP server for /health and /metrics. It listens before
+// returning, so a port that is already in use stops the worker at startup.
+func serveOps(ctx context.Context, port int, h http.Handler) (*http.Server, error) {
+	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return nil, fmt.Errorf("listen for health and metrics: %w", err)
+	}
+	srv := &http.Server{
+		Handler:           h,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+	go func() {
+		if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("health and metrics server stopped", "error", err)
+		}
+	}()
+	slog.Info("health and metrics listening", "addr", ln.Addr().String())
+	return srv, nil
 }

@@ -29,7 +29,7 @@ func NewRouter(logger *slog.Logger, db Pinger, notifications NotificationService
 	r.MethodNotAllowed(methodNotAllowed(r))
 
 	// Operational endpoints stay outside the versioned API.
-	r.Get("/health", Health(db, logger))
+	r.Get("/health", Health(map[string]Pinger{"database": db}, logger))
 	if reg != nil {
 		r.Method(http.MethodGet, "/metrics", Metrics(reg, logger))
 	}
@@ -44,6 +44,18 @@ func NewRouter(logger *slog.Logger, db Pinger, notifications NotificationService
 		r.Post("/batches/{id}/cancel", CancelBatch(notifications, logger))
 	})
 
+	return r
+}
+
+// NewOpsRouter builds the worker's HTTP server: /health (every dependency in checks) and
+// /metrics only. Requests aren't logged: Docker and Prometheus call these every few seconds.
+func NewOpsRouter(logger *slog.Logger, checks map[string]Pinger, reg *prometheus.Registry) http.Handler {
+	r := chi.NewRouter()
+	r.Use(middleware.Recoverer)
+	r.NotFound(routeNotFound)
+	r.MethodNotAllowed(methodNotAllowed(r))
+	r.Get("/health", Health(checks, logger))
+	r.Method(http.MethodGet, "/metrics", Metrics(reg, logger))
 	return r
 }
 

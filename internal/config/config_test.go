@@ -13,6 +13,9 @@ func TestLoad(t *testing.T) {
 	const dbURL = "postgres://localhost:5432/db"
 	// withDefaults fills in the worker defaults, so cases only spell out what they change.
 	withDefaults := func(c Config) Config {
+		if c.WorkerHTTPPort == 0 {
+			c.WorkerHTTPPort = 8081
+		}
 		if c.WorkerConcurrency == 0 {
 			c.WorkerConcurrency = 10
 		}
@@ -73,7 +76,7 @@ func TestLoad(t *testing.T) {
 			},
 			want: Config{
 				HTTPPort: 8080, LogLevel: slog.LevelInfo, DatabaseURL: dbURL,
-				WorkerConcurrency: 5, WorkerPollInterval: 2 * time.Second, WorkerShutdownTimeout: time.Minute,
+				WorkerHTTPPort: 8081, WorkerConcurrency: 5, WorkerPollInterval: 2 * time.Second, WorkerShutdownTimeout: time.Minute,
 				WorkerLeaseDuration: 2 * time.Minute, WorkerRecoverInterval: 10 * time.Second, ProviderTimeout: 5 * time.Second,
 				RetryMaxAttempts: 5, RetryBaseDelay: 10 * time.Second, RetryMaxDelay: 10 * time.Minute,
 				RateLimitPerSecond: 85, RateLimitBurst: 5,
@@ -129,6 +132,11 @@ func TestLoad(t *testing.T) {
 			name:    "rate limit not a number",
 			env:     map[string]string{"DATABASE_URL": dbURL, "RATE_LIMIT_PER_SECOND": "fast"},
 			wantErr: "RATE_LIMIT_PER_SECOND must be",
+		},
+		{
+			name:    "worker port out of range",
+			env:     map[string]string{"DATABASE_URL": dbURL, "WORKER_HTTP_PORT": "70000"},
+			wantErr: "WORKER_HTTP_PORT must be a port number from 1 to 65535",
 		},
 		{
 			name:    "recover interval not a duration",
@@ -219,7 +227,7 @@ func TestLoad(t *testing.T) {
 			// Start from a clean slate: empty values count as unset.
 			for _, key := range []string{
 				"HTTP_PORT", "LOG_LEVEL", "DATABASE_URL",
-				"WORKER_CONCURRENCY", "WORKER_POLL_INTERVAL", "WORKER_SHUTDOWN_TIMEOUT", "WORKER_LEASE_DURATION",
+				"WORKER_HTTP_PORT", "WORKER_CONCURRENCY", "WORKER_POLL_INTERVAL", "WORKER_SHUTDOWN_TIMEOUT", "WORKER_LEASE_DURATION",
 				"WORKER_RECOVER_INTERVAL",
 				"PROVIDER_URL", "PROVIDER_TIMEOUT", "RETRY_MAX_ATTEMPTS", "RETRY_BASE_DELAY", "RETRY_MAX_DELAY",
 				"REDIS_URL", "RATE_LIMIT_PER_SECOND", "RATE_LIMIT_BURST",

@@ -17,24 +17,24 @@ type healthResponse struct {
 	Checks map[string]string `json:"checks"`
 }
 
-// Health returns 200 when the database answers, 503 otherwise.
-func Health(db Pinger, logger *slog.Logger) http.HandlerFunc {
+// Health returns 200 when every dependency in checks answers, 503 otherwise, with the result
+// of each, e.g. {"database": "ok", "redis": "unreachable"}.
+func Health(checks map[string]Pinger, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 
-		if err := db.Ping(ctx); err != nil {
-			logger.WarnContext(ctx, "health check failed", "check", "database", "error", err)
-			writeJSON(w, http.StatusServiceUnavailable, healthResponse{
-				Status: "unavailable",
-				Checks: map[string]string{"database": "unreachable"},
-			})
-			return
+		resp := healthResponse{Status: "ok", Checks: map[string]string{}}
+		code := http.StatusOK
+		for name, dep := range checks {
+			if err := dep.Ping(ctx); err != nil {
+				logger.WarnContext(ctx, "health check failed", "check", name, "error", err)
+				resp.Checks[name] = "unreachable"
+				resp.Status, code = "unavailable", http.StatusServiceUnavailable
+				continue
+			}
+			resp.Checks[name] = "ok"
 		}
-
-		writeJSON(w, http.StatusOK, healthResponse{
-			Status: "ok",
-			Checks: map[string]string{"database": "ok"},
-		})
+		writeJSON(w, code, resp)
 	}
 }

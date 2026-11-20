@@ -25,6 +25,14 @@ func ConnectRedis(ctx context.Context, url string) (*redis.Client, error) {
 	return client, nil
 }
 
+// RedisPinger lets a health check ping Redis like the database pool.
+type RedisPinger struct{ Client *redis.Client }
+
+// Ping returns nil if Redis answers.
+func (p RedisPinger) Ping(ctx context.Context) error {
+	return p.Client.Ping(ctx).Err()
+}
+
 // RedisLogger passes the Redis library's own messages to slog, so they are JSON like every
 // other log line. Install it with redis.SetLogger.
 type RedisLogger struct {
