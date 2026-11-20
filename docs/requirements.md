@@ -38,7 +38,7 @@ Status values: **Done**, **Partial**, **Todo**.
 |---|---|---|---|---|
 | RET-1 | Classify errors: retry temporary ones (timeout, network, 5xx, 429), not permanent ones (4xx) | Done | 8 | `provider.IsTemporary` (D18); temporary ones go back to the queue, permanent ones are `failed` |
 | RET-2 | Exponential backoff with jitter between attempts | Done | 8 | `internal/retry` (D8): 10 s doubling to 10 min, equal jitter |
-| RET-3 | Max attempts, then mark `failed` and keep the last error | Todo | 8 | |
+| RET-3 | Max attempts, then mark `failed` and keep the last error | Done | 8 | `RETRY_MAX_ATTEMPTS` (5, D8); `last_error` keeps the last failure |
 | RET-4 | Respect `Retry-After` from the provider | Done | 8 | Seconds or HTTP date; used when longer than our wait, capped at `RETRY_MAX_DELAY` (D8) |
 | RET-5 | Recover jobs held by crashed workers (lease expiry) | Todo | 8 | |
 | RET-6 | Store the provider's `messageId` on success | Done | 6 | `provider_message_id`, set with status `sent` |

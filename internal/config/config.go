@@ -28,8 +28,9 @@ type Config struct {
 	ProviderURL     string        // where the worker sends notifications (D9: webhook.site); empty if unset
 	ProviderTimeout time.Duration // limit for one send
 
-	RetryBaseDelay time.Duration // wait after the first temporary failure, doubled each time (D8)
-	RetryMaxDelay  time.Duration // longest wait between attempts, also for the provider's Retry-After
+	RetryMaxAttempts int           // attempts in total before a notification is failed (D8)
+	RetryBaseDelay   time.Duration // wait after the first temporary failure, doubled each time (D8)
+	RetryMaxDelay    time.Duration // longest wait between attempts, also for the provider's Retry-After
 
 	RedisURL           string // Redis for the shared rate limiter; empty if unset
 	RateLimitPerSecond int    // sends per second per channel, for all workers together; below the provider's limit (D17)
@@ -38,6 +39,10 @@ type Config struct {
 
 // MaxWorkerConcurrency caps WORKER_CONCURRENCY (loops per channel); more only add database load.
 const MaxWorkerConcurrency = 1000
+
+// MaxRetryAttempts caps RETRY_MAX_ATTEMPTS; with the default waits, 100 attempts already span
+// more than 16 hours.
+const MaxRetryAttempts = 100
 
 // MaxRateLimitPerSecond caps RATE_LIMIT_PER_SECOND, a sanity bound well above the required 100.
 const MaxRateLimitPerSecond = 100000
@@ -103,6 +108,10 @@ func Load() (Config, error) {
 		return Config{}, errors.New("WORKER_LEASE_DURATION must be longer than PROVIDER_TIMEOUT")
 	}
 
+	maxAttempts, err := strconv.Atoi(getEnv("RETRY_MAX_ATTEMPTS", "5"))
+	if err != nil || maxAttempts < 1 || maxAttempts > MaxRetryAttempts {
+		return Config{}, fmt.Errorf("RETRY_MAX_ATTEMPTS must be a number from 1 to %d", MaxRetryAttempts)
+	}
 	retryBase, err := positiveDuration("RETRY_BASE_DELAY", "10s")
 	if err != nil {
 		return Config{}, err
@@ -137,7 +146,7 @@ func Load() (Config, error) {
 		WorkerConcurrency: concurrency, WorkerPollInterval: poll, WorkerShutdownTimeout: shutdown,
 		WorkerLeaseDuration: lease,
 		ProviderURL:         providerURL, ProviderTimeout: providerTimeout,
-		RetryBaseDelay: retryBase, RetryMaxDelay: retryMax,
+		RetryMaxAttempts: maxAttempts, RetryBaseDelay: retryBase, RetryMaxDelay: retryMax,
 		RedisURL: redisURL, RateLimitPerSecond: perSecond, RateLimitBurst: burst,
 	}, nil
 }

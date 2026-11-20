@@ -7,7 +7,7 @@ import (
 
 // fixed returns a Policy whose jitter always draws r.
 func fixed(r float64) Policy {
-	p := New(10*time.Second, 10*time.Minute)
+	p := New(5, 10*time.Second, 10*time.Minute)
 	p.rand = func() float64 { return r }
 	return p
 }
@@ -44,7 +44,7 @@ func TestDelay(t *testing.T) {
 
 // With the real random source, every wait lies between half and all of the backoff.
 func TestDelay_JitterStaysInRange(t *testing.T) {
-	p := New(10*time.Second, 10*time.Minute)
+	p := New(5, 10*time.Second, 10*time.Minute)
 	seen := map[time.Duration]bool{}
 	for range 1000 {
 		d := p.Delay(3, 0) // backoff 40 s
@@ -55,5 +55,20 @@ func TestDelay_JitterStaysInRange(t *testing.T) {
 	}
 	if len(seen) < 10 {
 		t.Errorf("only %d different waits in 1000 draws, want them spread out", len(seen))
+	}
+}
+
+// Five attempts in total: after the 1st to 4th failure try again, after the 5th stop (RET-3).
+func TestNext_StopsAfterTheLastAttempt(t *testing.T) {
+	p := fixed(0)
+	for attempt := 1; attempt <= 4; attempt++ {
+		if wait, ok := p.Next(attempt, 0); !ok || wait != p.Delay(attempt, 0) {
+			t.Errorf("Next(%d) = %v, %v; want the backoff and true", attempt, wait, ok)
+		}
+	}
+	for _, attempt := range []int{5, 6} { // 6: e.g. attempts counted by sends cut off at shutdown
+		if wait, ok := p.Next(attempt, 30*time.Second); ok || wait != 0 {
+			t.Errorf("Next(%d) = %v, %v; want 0 and false", attempt, wait, ok)
+		}
 	}
 }

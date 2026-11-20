@@ -28,6 +28,9 @@ func TestLoad(t *testing.T) {
 		if c.ProviderTimeout == 0 {
 			c.ProviderTimeout = 5 * time.Second
 		}
+		if c.RetryMaxAttempts == 0 {
+			c.RetryMaxAttempts = 5
+		}
 		if c.RetryBaseDelay == 0 {
 			c.RetryBaseDelay = 10 * time.Second
 		}
@@ -69,7 +72,7 @@ func TestLoad(t *testing.T) {
 				HTTPPort: 8080, LogLevel: slog.LevelInfo, DatabaseURL: dbURL,
 				WorkerConcurrency: 5, WorkerPollInterval: 2 * time.Second, WorkerShutdownTimeout: time.Minute,
 				WorkerLeaseDuration: 2 * time.Minute, ProviderTimeout: 5 * time.Second,
-				RetryBaseDelay: 10 * time.Second, RetryMaxDelay: 10 * time.Minute,
+				RetryMaxAttempts: 5, RetryBaseDelay: 10 * time.Second, RetryMaxDelay: 10 * time.Minute,
 				RateLimitPerSecond: 85, RateLimitBurst: 5,
 			},
 		},
@@ -123,6 +126,16 @@ func TestLoad(t *testing.T) {
 			name:    "rate limit not a number",
 			env:     map[string]string{"DATABASE_URL": dbURL, "RATE_LIMIT_PER_SECOND": "fast"},
 			wantErr: "RATE_LIMIT_PER_SECOND must be",
+		},
+		{
+			name:    "max attempts 0",
+			env:     map[string]string{"DATABASE_URL": dbURL, "RETRY_MAX_ATTEMPTS": "0"},
+			wantErr: "RETRY_MAX_ATTEMPTS must be a number from 1 to 100",
+		},
+		{
+			name:    "max attempts too many",
+			env:     map[string]string{"DATABASE_URL": dbURL, "RETRY_MAX_ATTEMPTS": "101"},
+			wantErr: "RETRY_MAX_ATTEMPTS must be",
 		},
 		{
 			name:    "retry base longer than max",
@@ -199,7 +212,7 @@ func TestLoad(t *testing.T) {
 			for _, key := range []string{
 				"HTTP_PORT", "LOG_LEVEL", "DATABASE_URL",
 				"WORKER_CONCURRENCY", "WORKER_POLL_INTERVAL", "WORKER_SHUTDOWN_TIMEOUT", "WORKER_LEASE_DURATION",
-				"PROVIDER_URL", "PROVIDER_TIMEOUT", "RETRY_BASE_DELAY", "RETRY_MAX_DELAY",
+				"PROVIDER_URL", "PROVIDER_TIMEOUT", "RETRY_MAX_ATTEMPTS", "RETRY_BASE_DELAY", "RETRY_MAX_DELAY",
 				"REDIS_URL", "RATE_LIMIT_PER_SECOND", "RATE_LIMIT_BURST",
 			} {
 				t.Setenv(key, "")

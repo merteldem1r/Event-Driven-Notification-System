@@ -25,10 +25,11 @@ type Queue interface {
 	Unclaim(ctx context.Context, id uuid.UUID, attempt int) (ok bool, _ error)
 }
 
-// Backoff says how long to wait after failed attempt number attempt, given how long the
-// provider asked us to wait (0 if it didn't).
-type Backoff interface {
-	Delay(attempt int, retryAfter time.Duration) time.Duration
+// Retries decides what follows a temporary failure (D8): after failed attempt number attempt,
+// wait that long and try again (retryAfter is the provider's own wait, 0 if none), or stop
+// with ok false when no attempts are left.
+type Retries interface {
+	Next(attempt int, retryAfter time.Duration) (wait time.Duration, ok bool)
 }
 
 // Limiter hands out rate-limit slots per channel, shared by all workers (D15).
@@ -59,7 +60,7 @@ type Dispatcher struct {
 	queue   Queue
 	sender  Sender
 	limiter Limiter
-	backoff Backoff
+	retries Retries
 	lease   time.Duration
 	logger  *slog.Logger
 	turn    atomic.Uint64 // position in claimPattern, shared by this channel's worker loops
@@ -67,11 +68,11 @@ type Dispatcher struct {
 
 // NewDispatcher returns a Dispatcher for channel ch that leases each claimed notification for
 // lease, waits for a slot of limiter, sends it through sender, and retries temporary failures
-// after the wait backoff gives.
-func NewDispatcher(ch domain.Channel, queue Queue, sender Sender, limiter Limiter, backoff Backoff,
+// as retries says.
+func NewDispatcher(ch domain.Channel, queue Queue, sender Sender, limiter Limiter, retries Retries,
 	lease time.Duration, logger *slog.Logger,
 ) *Dispatcher {
-	return &Dispatcher{channel: ch, queue: queue, sender: sender, limiter: limiter, backoff: backoff, lease: lease, logger: logger}
+	return &Dispatcher{channel: ch, queue: queue, sender: sender, limiter: limiter, retries: retries, lease: lease, logger: logger}
 }
 
 // ProcessNext takes the next notification of the channel and delivers it; found is false if
@@ -135,14 +136,8 @@ func (d *Dispatcher) deliver(ctx context.Context, n domain.Notification) error {
 	case ctx.Err() != nil: // we gave up at the shutdown deadline; the provider didn't fail
 		recorded, err = d.queue.Release(rec, n.ID, n.Attempts)
 		log.WarnContext(ctx, "send cut off by shutdown, notification back in the queue", "duration_ms", took)
-	case provider.IsTemporary(sendErr): // a retry may work (D18): try again later (D8)
-		delay := d.backoff.Delay(n.Attempts, provider.RetryAfter(sendErr))
-		recorded, err = d.queue.Retry(rec, n.ID, n.Attempts, sendErr.Error(), delay)
-		log.WarnContext(ctx, "notification failed, will retry", "error", sendErr, "temporary", true,
-			"retry_in", delay.Round(time.Millisecond).String(), "duration_ms", took)
-	default: // the provider rejected it: a retry would fail the same way
-		recorded, err = d.queue.MarkFailed(rec, n.ID, n.Attempts, sendErr.Error())
-		log.WarnContext(ctx, "notification failed", "error", sendErr, "temporary", false, "duration_ms", took)
+	default:
+		recorded, err = d.failed(ctx, rec, log, n, sendErr, took)
 	}
 	if err != nil {
 		return fmt.Errorf("record result: %w", err)
@@ -151,6 +146,26 @@ func (d *Dispatcher) deliver(ctx context.Context, n domain.Notification) error {
 		log.WarnContext(ctx, "result not recorded: the notification was claimed again meanwhile")
 	}
 	return nil
+}
+
+// failed records a failed send: back to the queue for a later attempt if the error is
+// temporary (D18) and attempts are left (D8), otherwise final with the last error (RET-3).
+func (d *Dispatcher) failed(ctx, rec context.Context, log *slog.Logger, n domain.Notification, sendErr error, took int64) (bool, error) {
+	temporary := provider.IsTemporary(sendErr)
+	if temporary {
+		if wait, ok := d.retries.Next(n.Attempts, provider.RetryAfter(sendErr)); ok {
+			log.WarnContext(ctx, "notification failed, will retry", "error", sendErr, "temporary", true,
+				"retry_in", wait.Round(time.Millisecond).String(), "duration_ms", took)
+			return d.queue.Retry(rec, n.ID, n.Attempts, sendErr.Error(), wait)
+		}
+	}
+	reason := "rejected by the provider" // a retry would fail the same way
+	if temporary {
+		reason = "no attempts left"
+	}
+	log.WarnContext(ctx, "notification failed", "error", sendErr, "temporary", temporary, "reason", reason,
+		"duration_ms", took)
+	return d.queue.MarkFailed(rec, n.ID, n.Attempts, sendErr.Error())
 }
 
 // unclaim puts n back in the queue without counting the attempt, since nothing was sent: the
