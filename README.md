@@ -100,13 +100,18 @@ curl localhost:8080/api/v1/notifications/<id>
 # "status": "sent", "attempts": 1, "provider_message_id": "12d2f537-..."
 ```
 
-### 5. Watch it work
+### 5. Explore the API in your browser
+
+Open **[localhost:8080/docs](http://localhost:8080/docs)**: interactive documentation of every
+endpoint, with a "Try it out" button that sends real requests to the running service.
+
+### 6. Watch it work
 
 ```bash
 make logs     # follow the API, worker and fake provider logs (Ctrl+C stops following)
 ```
 
-### 6. Stop
+### 7. Stop
 
 ```bash
 docker compose down        # stop everything, keep the data
@@ -300,8 +305,9 @@ is the end of the run. The test fails if any channel goes over 100 in any one-se
 
 ### API
 
-All endpoints are under `/api/v1` and use JSON. The full specification is
-[`docs/openapi.yaml`](docs/openapi.yaml).
+All endpoints are under `/api/v1` and use JSON. Try them at
+[localhost:8080/docs](http://localhost:8080/docs) (Swagger UI); the specification is
+[`docs/openapi.yaml`](docs/openapi.yaml), also served at `localhost:8080/openapi.yaml`.
 
 | Request | What it does |
 |---|---|

@@ -30,7 +30,7 @@ Status values: **Done**, **Partial**, **Todo**.
 | PROC-2 | Rate limiting: max 100 messages/second **per channel** | Done | 7 | Shared Redis limiter (D15); loops per channel claim, then wait for a slot, then send (D16); fail closed when Redis is down; at most 100 at the provider in any one second, sending at 85/s with burst 5 (D17) |
 | PROC-3 | Priority queue support (high, normal, low) | Done | 6 | Weighted 6:3:1 with fallback (D7) |
 | PROC-4 | Content validation (character limits, required fields) | Done | 4 | D4: SMS 1,600, push 500, email 100,000 characters; recipient format per channel; all field errors returned as `400 validation_failed` |
-| PROC-5 | Idempotency support to prevent duplicate sends | Partial | 4, 8 | API level done for single and batch creates (D12: `Idempotency-Key` header, race-free via unique index); worker level (lease + dedup key) in Phase 8 |
+| PROC-5 | Idempotency support to prevent duplicate sends | Done | 4, 6, 8 | API: `Idempotency-Key` on single and batch creates (D12, race-free via a unique index). Worker: each claim is fenced by its attempt number, so only one result is recorded, and every send carries the notification ID as `Idempotency-Key` to the provider; a duplicate is possible only after a crash (at-least-once, D19) |
 
 ## 3. Delivery & Retry Logic (our own design)
 
@@ -78,9 +78,9 @@ Status values: **Done**, **Partial**, **Todo**.
 | DEL-1 | Repository with clean commit history | Partial | all | Conventional Commits enforced by hook + CI (done); ongoing |
 | DEL-2 | README.md: setup, architecture overview, API examples | Done | 15 | Idea and building blocks, getting started, how it works with Mermaid diagrams, design decisions, failure behavior, measured results, API and monitoring reference |
 | DEL-3 | Docker Compose: one-command setup (`docker compose up`) | Done | 2, 6 | api, worker, fake provider, migrations, PostgreSQL, Redis; works without any settings (the worker uses the fake provider unless `PROVIDER_URL` is set) |
-| DEL-4 | API documentation: Swagger/OpenAPI specification | Partial | 4–15 | `docs/openapi.yaml` (OpenAPI 3.0.3) covers every endpoint so far (create, batch, get, list, batch status, both cancels, health); tests keep it in sync with the router and real responses; grows with each endpoint; Swagger UI in Phase 15 |
+| DEL-4 | API documentation: Swagger/OpenAPI specification | Done | 4–15 | `docs/openapi.yaml` (OpenAPI 3.0.3) covers every endpoint; tests keep it in sync with the router and real responses; Swagger UI at `GET /docs`, the spec at `GET /openapi.yaml` |
 | DEL-5 | Database migrations: versioned schema changes | Done | 3 | golang-migrate, numbered up/down SQL files, applied automatically by Compose; new migrations added as features need them |
-| DEL-6 | Test suite runnable with a single command | Partial | all | `make test` (race detector) and `make check` (done); repository tests use testcontainers and need Docker; grows with each step |
+| DEL-6 | Test suite runnable with a single command | Done | all | `make test` runs every test with the race detector (tests against real PostgreSQL and Redis via testcontainers need Docker); `make check` adds vet and lint; `make loadtest` for the rate limit |
 
 ## 8. Implied requirements (not written, but expected)
 

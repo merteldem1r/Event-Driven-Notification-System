@@ -9,7 +9,7 @@ is tested. Then we stop, explain it, and the user commits it.
 
 Status: `[x]` done, `[ ]` not done. The next step is marked **(next)**.
 
-> **Current position:** Phase 15, step **15.3** (Swagger UI).
+> **Current position:** required work done. Optional: 8.5 (re-queue endpoint) or one optional feature (10 to 14).
 
 ---
 
@@ -116,7 +116,9 @@ asking for it.
 - [ ] 13 Distributed tracing with OpenTelemetry + Jaeger (OPT-5)
 - [ ] 14 Full CI/CD: race detector, vulnerability check, image build (OPT-6)
 
-## Phase 15 · Proof and polish
+## Phase 15 · Proof and polish (done)
 - [x] 15.1 Load test: burst proves the 100/s cap holds (IMP-9); done early in 7.4
 - [x] 15.2 README: the idea and building blocks, getting started (Docker and local), how it works step by step with diagrams (flow, priority, shared rate limit, retries), key decisions, failure behavior, measured results with charts, reference (API, monitoring, tests, configuration) (DEL-2)
-- [ ] 15.3 OpenAPI complete + Swagger UI (DEL-4) **(next)**
+- [x] 15.3 Swagger UI at `GET /docs` (pinned Swagger UI from jsDelivr with integrity hashes) and the spec at `GET /openapi.yaml`, built into the binary from `docs/openapi.yaml` (`docs` package); both documented in the spec; a test checks the served spec equals the file (DEL-4)
+
+**Summary:** `docs/application/11-proof-and-polish.md`.
