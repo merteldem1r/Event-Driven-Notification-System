@@ -69,7 +69,7 @@ Status values: **Done**, **Partial**, **Todo**.
 | OPT-3 | Template system with variable substitution | Done | 11 | Immutable templates with `{{name}}` placeholders (create, get, list); notifications use `template` + `variables` instead of `content`, rendered at creation (D22) |
 | OPT-4 | WebSocket real-time status updates | Todo | 12 | Redis pub/sub between worker and API |
 | OPT-5 | Distributed tracing | Todo | 13 | OpenTelemetry + Jaeger |
-| OPT-6 | GitHub Actions CI/CD: automated testing and linting | Partial | 2, 14 | Commit-message check, lint, vet, tests with race detector (done); image build and more checks in Phase 14 |
+| OPT-6 | GitHub Actions CI/CD: automated testing and linting | Done | 2, 14 | Lint, vet, tests with the race detector, govulncheck, migrations up/down/up, smoke test of the full stack, commit-message check; Docker image built on every run and published to GHCR from main (D23) |
 
 ## 7. Deliverables
 

@@ -9,7 +9,7 @@ is tested. Then we stop, explain it, and the user commits it.
 
 Status: `[x]` done, `[ ]` not done. The next step is marked **(next)**.
 
-> **Current position:** optional features, in this order: 10 scheduled notifications (done), 11 templates (done), 14 full CI/CD **(next)**; then decide on more (WebSocket, 12).
+> **Current position:** optional features 10, 11 and 14 done. Next: decide on more (WebSocket, 12; a web UI is being built separately).
 
 ---
 
@@ -129,7 +129,11 @@ Chosen: 10, 11 and 14, in that order (cheapest first, CI/CD last so it covers th
   Summary: `docs/application/13-templates.md`
 - [ ] 12 WebSocket status updates (OPT-4)
 - [ ] 13 Distributed tracing with OpenTelemetry + Jaeger (OPT-5)
-- [ ] 14 Full CI/CD: race detector, vulnerability check, image build (OPT-6)
+- [x] 14 Full CI/CD (D23, OPT-6): jobs in parallel for lint, tests (race detector), govulncheck
+  (`make vulncheck`), migrations up/down/up on PostgreSQL, and an end-to-end smoke test (`make smoke`,
+  `scripts/smoke.sh`); then the Docker image, built on every run and pushed to `ghcr.io` from `main`
+  only. The scan found 31 reachable standard library vulnerabilities in Go 1.26.0: `go.mod` raised to
+  1.26.11. `web/` left out of the Docker build. Summary: `docs/application/14-ci-cd.md`
 
 ## Phase 15 · Proof and polish (done)
 - [x] 15.1 Load test: burst proves the 100/s cap holds (IMP-9); done early in 7.4

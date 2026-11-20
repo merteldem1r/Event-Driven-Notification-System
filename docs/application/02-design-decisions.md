@@ -32,6 +32,7 @@
 | D20 | Metrics: queue depth, send results, latency, HTTP | Phase 9 (observability) | Decided: queue counted on each scrape; one send counter with `result`; two latency histograms; HTTP request metrics |
 | D21 | Scheduled notifications: storage and rules | Phase 10 (scheduling) | Decided: `scheduled_at` column; future only, at most 30 days; per batch item |
 | D22 | Templates: syntax, reference, lifecycle, variables | Phase 11 (templates) | Decided: `{{name}}` placeholders; by unique name; create, get, list only; missing variable 400, extras ignored |
+| D23 | CI/CD: image publishing and extra checks | Phase 14 (CI/CD) | Decided: build always, publish to GHCR from main after every check; govulncheck, migrations up/down/up, smoke test; no Dependabot |
 
 **Why only D1–D3 now?** They decide *what the database schema looks like, how workers are
 written, and what runs in docker-compose*. Changing them later means rewriting a lot.
@@ -599,6 +600,31 @@ deleted). A template is saved before the answer, so creating one returns `201`, 
 
 ---
 
+## D23 — CI/CD
+
+CI already ran lint, vet and the tests with the race detector. Three choices:
+
+- **The image.** Build it on every run, or build it and also publish it from `main` to GitHub
+  Container Registry. Publishing is the delivery half of CI/CD: every commit on `main` has a
+  ready-to-run image. The repository is public, so the image is too; it holds only compiled code.
+- **Extra checks.** A vulnerability scan (`govulncheck`), the migrations up, down and up again on
+  a real PostgreSQL (the tests only go up), an end-to-end smoke test of the whole Compose stack,
+  and the load test. Shared CI runners have uneven timing, so a load test there could fail now
+  and then for reasons unrelated to the code.
+- **Dependabot**, opening weekly pull requests for newer dependencies, or updating them by hand.
+
+Chosen: **build the image on every run and publish it from `main` once every other job has
+passed, tagged `sha-<commit>` and `latest`; add govulncheck, migrations up/down/up and the
+smoke test; no load test in CI and no Dependabot.** The jobs run in parallel; only the image
+waits for the others. Publishing uses the run's own short-lived `GITHUB_TOKEN`, so there is no
+secret to manage, and only the image job may write packages.
+
+The scan paid off at once: `go.mod` said `go 1.26.0`, and CI installs exactly that version, so
+CI built with a standard library that has 31 known vulnerabilities our code reaches (fixed in
+1.26.11). `go.mod` now says 1.26.11; the Docker build already used the latest 1.26 patch.
+
+---
+
 ## Resulting architecture
 
 ```
@@ -645,6 +671,7 @@ deleted). A template is saved before the answer, so creating one returns `201`, 
 | D20 | Metrics | **API:** `notifications_queue_depth{channel,status}` and `notifications_queue_oldest_due_seconds{channel}` counted in the database on each scrape; `http_requests_total{method,route,status}`, `http_request_duration_seconds{method,route}`. **Worker (9.2):** `notifications_send_total{channel,result}`, provider-call and end-to-end latency histograms, recovered leases. Own registry per program | Exact queue numbers without coordination between processes; success rate from one counter; latency seen both at the provider and by the customer; bounded series (route patterns, not URLs) | One small query per scrape; the same queue numbers from every API instance | 2026-11-20 |
 | D21 | Scheduled notifications | **Optional `scheduled_at` (RFC 3339 with a time zone), stored in a new column; `next_attempt_at` starts there; must be in the future and at most 30 days ahead, otherwise `400`; per batch item** | A past time is usually a time zone mistake; the column keeps the requested time through retries and lets the delivery metric count from it | Clients wanting "now" leave the field out; no scheduling beyond 30 days | 2026-11-20 |
 | D22 | Templates | **`{{name}}` placeholders, by unique name; `POST`, `GET /api/v1/templates` and `GET /api/v1/templates/{name}` only (immutable); `template` + `variables` instead of `content`; rendered at creation; a missing variable is a `400`, extras are ignored; not tied to a channel** | Simple to explain and safe (no logic in templates); immutable templates can't break clients; the stored content is the final text | No conditions or loops; a new wording needs a new name | 2026-11-20 |
+| D23 | CI/CD | **Jobs in parallel: lint, tests, govulncheck, migrations up/down/up, smoke test (`make smoke`); then the Docker image, built on every run and published to `ghcr.io` from `main` only, tagged `sha-<commit>` and `latest`; no load test in CI; no Dependabot** | Every commit on main has a tested, ready-to-run image; the checks cover what unit tests can't (down migrations, the built image, known vulnerabilities) | Public image; dependencies updated by hand | 2026-11-20 |
 | D9 | Provider | **webhook.site only, for now**: the worker sends to `PROVIDER_URL` (your own webhook.site URL, set to answer `202 {messageId, status, timestamp}`); an own local fake provider is noted in the plan as an optional later step | Exactly the integration the requirements ask for; less code now; every send is visible in the browser | Offline runs; load tests beyond webhook.site's free request limit; a provider that fails or slows down on purpose for retry tests (until the fake is added) | 2026-11-20 |
 | D8 | Retry numbers | **5 attempts; waits start at 10 s and double, capped at 10 min; equal jitter (half to all of the wait); `Retry-After` used when longer, same cap**; then `failed` with the last error; `RETRY_MAX_ATTEMPTS`, `RETRY_BASE_DELAY`, `RETRY_MAX_DELAY` | Covers blips and short outages (~2.5 min in total) while messages are still useful; retries that failed together are spread out; never earlier than the provider asked, never parked for days | Long outages end in `failed` rather than waiting longer | 2026-11-20 |
 | D9 (revised) | Provider | **Own fake provider by default** (`cmd/fakeprovider`, `internal/fakeprovider`): answers `POST` on any path like webhook.site with `202 {messageId, status, timestamp}`; `FAKE_PROVIDER_LATENCY` (default 50ms) and `FAKE_PROVIDER_FAILURE_RATE` (share answered `503`); logs the messages received per channel each second; a Compose service the worker uses unless `PROVIDER_URL` is set (e.g. to webhook.site in `.env`) | Load tests at 100/s per channel without webhook.site's free request limit; provider failures on demand for Phase 8; works offline; the per-second report measures the rate limit | A second, simpler provider than the real one (no `429`, no `Retry-After` yet; added when Phase 8 needs them) | 2026-11-20 |

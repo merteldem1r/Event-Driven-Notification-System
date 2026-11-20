@@ -387,13 +387,35 @@ The metrics are in Prometheus format. With several workers, `docker compose port
 shows each worker's port. Logs are JSON; every line carries the request's correlation ID and
 never the message content.
 
-### Tests
+### Tests and CI/CD
 
 | Command | What it does |
 |---|---|
 | `make test` | All tests, including tests against real PostgreSQL and Redis started in Docker |
-| `make check` | Code checks, linter and all tests; GitHub Actions runs the same on every push |
+| `make check` | Code checks, linter and all tests |
+| `make vulncheck` | Fails if the code reaches a known vulnerability in Go or a dependency |
+| `make smoke` | Starts the stack and sends one notification end to end |
 | `make loadtest` | The load test from the results above |
+
+GitHub Actions runs on every push and pull request:
+
+```mermaid
+flowchart LR
+    push([Push or pull request]) --> lint[Lint]
+    push --> test[Tests]
+    push --> vuln[Vulnerability scan]
+    push --> mig[Migrations<br/>up, down, up]
+    push --> smoke[Smoke test<br/>full stack]
+    lint & test & vuln & mig & smoke --> image[Docker image]
+    image -->|main only| ghcr[(GitHub Container<br/>Registry)]
+```
+
+The image is built on every run, and published only from `main` once every check has passed,
+tagged with the commit (`sha-...`) and `latest`:
+
+```bash
+docker pull ghcr.io/merteldem1r/event-driven-notification-system:latest
+```
 
 ### Configuration
 
